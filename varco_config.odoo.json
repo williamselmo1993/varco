@@ -1,0 +1,37 @@
+{
+  "erp": {
+    "tipo": "odoo",
+    "base_url": "https://tuazienda.odoo.com",
+    "db": "tuazienda",
+    "username": "api@tuazienda.com"
+  },
+  "entities": {
+    "clienti": { "model": "res.partner", "description": "Anagrafica clienti", "label": "Clienti", "singolare": "un cliente", "campi": ["name", "email", "vat", "phone"] },
+    "ordini": { "model": "sale.order", "description": "Ordini di vendita", "label": "Ordini di vendita", "singolare": "un ordine di vendita", "campo_importo": "amount_total", "campi": ["name", "partner_id", "amount_total", "state"] },
+    "fatture": { "model": "account.move", "description": "Fatture", "label": "Fatture", "singolare": "una fattura", "campo_importo": "amount_total", "campi": ["name", "partner_id", "amount_total", "invoice_date_due", "payment_state"] },
+    "articoli": { "model": "product.template", "description": "Articoli e giacenze", "label": "Articoli", "singolare": "un articolo", "campi": ["name", "default_code", "qty_available", "list_price"] }
+  },
+  "departments": {
+    "vendite": "Vendite",
+    "amministrazione": "Amministrazione"
+  },
+  "agents": {
+    "assistente-vendite": {
+      "department": "vendite",
+      "label": "Assistente Vendite",
+      "descrizione": "Dagli ordini ricevuti via email al gestionale.",
+      "azioni": ["Inserisce gli ordini ricevuti via email o PDF", "Risponde su clienti, ordini e fatture"],
+      "read": ["clienti", "ordini", "fatture"],
+      "write": ["ordini"],
+      "soglie": { "ordini": 1000 }
+    },
+    "sollecitatore": {
+      "department": "amministrazione",
+      "label": "Recupero Crediti",
+      "descrizione": "Controlla lo scadenzario e prepara i solleciti.",
+      "azioni": ["Controlla le fatture scadute", "Prepara i solleciti da approvare"],
+      "read": ["clienti", "fatture"],
+      "write": []
+    }
+  }
+}

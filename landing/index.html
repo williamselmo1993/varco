@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Varco — the approval gateway for AI agents</title>
+<meta name="description" content="Your AI agents act on real systems. You approve from your phone. Policies, thresholds, audit — over MCP.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{--paper:#F6F8F4;--card:#fff;--ink:#16211A;--muted:#56675C;--line:#D7DFD6;
+        --green:#22593F;--green-soft:#E6EFE6;--dark:#1B4231}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;font-size:16.5px;line-height:1.6}
+  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
+  nav{display:flex;justify-content:space-between;align-items:center;padding:22px 0}
+  .logo{font-family:"Archivo",sans-serif;font-weight:800;font-size:21px;letter-spacing:.06em}
+  .logo span{color:var(--green)}
+  nav a.gh{font-family:"IBM Plex Mono",monospace;font-size:13.5px;color:var(--ink);
+           text-decoration:none;border:1.5px solid var(--ink);border-radius:6px;padding:7px 14px}
+  .hero{padding:64px 0 40px;text-align:left}
+  .hero h1{font-family:"Archivo",sans-serif;font-weight:800;font-size:clamp(34px,5.6vw,54px);
+           line-height:1.08;letter-spacing:-.015em;margin:0;max-width:18ch;text-wrap:balance}
+  .hero h1 em{color:var(--green);font-style:normal}
+  .hero p{font-size:19px;max-width:56ch;margin:22px 0 0;color:var(--ink)}
+  .cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:30px}
+  .btn{font-family:"IBM Plex Sans",sans-serif;font-weight:600;font-size:16px;border-radius:7px;
+       padding:13px 26px;text-decoration:none;display:inline-block}
+  .btn-primary{background:var(--green);color:#fff;border:1.5px solid var(--green)}
+  .btn-ghost{background:transparent;color:var(--green);border:1.5px solid var(--green)}
+  .trust{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--muted);margin-top:18px}
+  .demo{background:var(--dark);border-radius:10px;padding:26px 28px;margin:56px 0;color:#E8F0EA;
+        font-family:"IBM Plex Mono",monospace;font-size:14px;line-height:1.8;overflow-x:auto}
+  .demo .c{color:#8FCBA8}.demo .d{color:#9DBBA9}
+  h2{font-family:"Archivo",sans-serif;font-weight:700;font-size:28px;margin:70px 0 8px;text-wrap:balance}
+  .sub{color:var(--muted);margin:0 0 26px;max-width:60ch}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:22px}
+  .step .n{font-family:"IBM Plex Mono",monospace;color:var(--green);font-size:13px;margin-bottom:8px}
+  .step b{font-size:17px}
+  .step p{font-size:14.5px;color:var(--muted);margin:8px 0 0}
+  .feats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .feat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:20px}
+  .feat b{font-size:15.5px}
+  .feat p{font-size:14px;color:var(--muted);margin:6px 0 0}
+  .plans{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+  .plan{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:22px;
+        display:flex;flex-direction:column}
+  .plan.hot{border:2px solid var(--green)}
+  .plan h3{font-family:"Archivo",sans-serif;font-size:17px;margin:0}
+  .plan .price{font-family:"Archivo",sans-serif;font-weight:800;font-size:30px;margin:10px 0 2px}
+  .plan .per{font-size:12.5px;color:var(--muted)}
+  .plan ul{padding-left:18px;font-size:13.5px;margin:14px 0 18px;color:var(--ink)}
+  .plan li{margin:5px 0}
+  .plan .btn{margin-top:auto;text-align:center;font-size:14.5px;padding:10px 0}
+  footer{margin-top:80px;border-top:2px solid var(--ink);padding:20px 0 48px;display:flex;
+         justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:14px;color:var(--muted)}
+  @media(max-width:760px){.steps,.feats{grid-template-columns:1fr}.plans{grid-template-columns:1fr 1fr}}
+  @media(max-width:520px){.plans{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <div class="logo">VARCO<span>&#9134;</span></div>
+    <a class="gh" href="https://github.com/pelomatto/varco">GitHub &#8599;</a>
+  </nav>
+
+  <div class="hero">
+    <h1>Your AI agents act.<br><em>You stay in control.</em></h1>
+    <p>Varco is the approval gateway for AI agents: per-agent permissions, autonomy thresholds, one-tap human approvals from your phone, and a full audit trail — over MCP, on any backend.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="mailto:william.selmo@pelomatto.it?subject=Varco%20early%20access">Get early access</a>
+      <a class="btn btn-ghost" href="https://github.com/pelomatto/varco">Star on GitHub</a>
+    </div>
+    <div class="trust">open source gateway &middot; MIT &middot; MCP-native &middot; works with Claude, Copilot, Cursor &amp; custom agents</div>
+  </div>
+
+  <div class="demo">
+<span class="d"># your agent tries to write:</span>
+agent&gt; create sales order — Rossi Srl, <b>€4,500</b>
+<span class="c">varco&gt; over your €1,000 threshold → sent for approval</span>
+<span class="d"># on your phone:</span>
+<span class="c">[Telegram] Sales Assistant wants to create a sales order
+           Customer: Rossi Srl · Total: €4,500
+           [ ✅ Approve ]  [ ❌ Reject ]</span>
+<span class="d"># under threshold? executes instantly. everything audited.</span>
+  </div>
+
+  <h2>How it works</h2>
+  <p class="sub">Three steps between "we should try AI agents" and agents safely running your back office.</p>
+  <div class="steps">
+    <div class="step"><div class="n">01 · CONNECT</div><b>Plug in over MCP</b><p>Any MCP-compatible agent connects to Varco instead of your backend. Mock ERP included; REST and Odoo adapters built in.</p></div>
+    <div class="step"><div class="n">02 · SET POLICY</div><b>Give each agent its lane</b><p>Read/write permissions per entity and autonomy thresholds per amount. In-policy actions run instantly — and get logged.</p></div>
+    <div class="step"><div class="n">03 · APPROVE</div><b>Decide from your phone</b><p>Everything else becomes a plain-language card: review, fix values if needed, approve or reject with one tap.</p></div>
+  </div>
+
+  <h2>What's in the box</h2>
+  <p class="sub">The governance layer nobody ships: built for the approver, not just the developer.</p>
+  <div class="feats">
+    <div class="feat"><b>Per-agent identity</b><p>Every agent is registered with its own permissions. Unknown agents are rejected at the first call.</p></div>
+    <div class="feat"><b>Autonomy thresholds</b><p>Auto-approve under limits you set. No approval fatigue, no rubber-stamping — routine runs itself.</p></div>
+    <div class="feat"><b>Review &amp; edit</b><p>Approvers can correct the proposal before it executes. Not just yes/no.</p></div>
+    <div class="feat"><b>Telegram approvals</b><p>One-tap approve/reject where you already are. WhatsApp Business next.</p></div>
+    <div class="feat"><b>Immutable audit trail</b><p>Every read, request and decision recorded — your EU AI Act human-oversight evidence, built in.</p></div>
+    <div class="feat"><b>ERP-aware semantics</b><p>Customers, orders, invoices — one vocabulary across mock, REST and Odoo backends. More adapters coming.</p></div>
+  </div>
+
+  <h2>Pricing</h2>
+  <p class="sub">Flat and predictable. No credits, no per-message metering.</p>
+  <div class="plans">
+    <div class="plan"><h3>Community</h3><div class="price">$0</div><div class="per">self-hosted, forever</div>
+      <ul><li>Full gateway, MIT licensed</li><li>2 approvers</li><li>Web + Telegram approvals</li><li>7-day audit history</li></ul>
+      <a class="btn btn-ghost" href="https://github.com/pelomatto/varco">Get the code</a></div>
+    <div class="plan hot"><h3>Pro</h3><div class="price">$99</div><div class="per">per workspace / month</div>
+      <ul><li>Hosted cloud</li><li>5 approvers</li><li>Autonomy thresholds</li><li>Odoo connector</li><li>90-day audit log</li></ul>
+      <a class="btn btn-primary" href="mailto:william.selmo@pelomatto.it?subject=Varco%20Pro">Join waitlist</a></div>
+    <div class="plan"><h3>Business</h3><div class="price">$399</div><div class="per">per workspace / month</div>
+      <ul><li>20 approvers, SSO</li><li>Immutable audit export</li><li>AI Act evidence pack</li><li>Priority support</li></ul>
+      <a class="btn btn-ghost" href="mailto:william.selmo@pelomatto.it?subject=Varco%20Business">Join waitlist</a></div>
+    <div class="plan"><h3>Enterprise</h3><div class="price">Custom</div><div class="per">self-hosted, DPA, SLA</div>
+      <ul><li>Self-hosted gateway support</li><li>Custom adapters</li><li>Onboarding &amp; SLAs</li></ul>
+      <a class="btn btn-ghost" href="mailto:william.selmo@pelomatto.it?subject=Varco%20Enterprise">Talk to us</a></div>
+  </div>
+
+  <footer>
+    <div><b style="color:var(--ink)">Varco</b> — the approval gateway for AI agents</div>
+    <div>Built in Italy 🇮🇹 &middot; <a href="mailto:william.selmo@pelomatto.it" style="color:var(--green)">william.selmo@pelomatto.it</a></div>
+  </footer>
+</div>
+</body>
+</html>
