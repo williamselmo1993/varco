@@ -33,15 +33,28 @@ ACCESS_KEY = os.environ.get("VARCO_ACCESS_KEY", "")
 
 
 def _parse_approvers() -> dict:
+    """nome:chiave:reparti[:limite€][:ruolo] — reparti '*'=tutti; ruolo admin|approver|viewer."""
     out = {}
     for entry in os.environ.get("VARCO_APPROVERS", "").split(";"):
         entry = entry.strip()
         if not entry:
             continue
-        name, key, depts = entry.split(":", 2)
+        parts = entry.split(":")
+        name, key = parts[0].strip(), parts[1]
+        depts_s = parts[2].strip() if len(parts) > 2 else "*"
+        limit, role = None, "approver"
+        for p in parts[3:]:
+            p = p.strip()
+            if not p:
+                continue
+            try:
+                limit = float(p)
+            except ValueError:
+                role = p
         out[name] = {"key": key,
-                     "depts": None if depts.strip() == "*"
-                     else [d.strip() for d in depts.split(",") if d.strip()]}
+                     "depts": None if depts_s == "*"
+                     else [d.strip() for d in depts_s.split(",") if d.strip()],
+                     "limit": limit, "role": role}
     return out
 
 
@@ -78,9 +91,17 @@ def authed(request) -> bool:
     return current_approver(request) is not None
 
 
-def can_decide(name: str, agent_id: str) -> bool:
-    depts = _approvers().get(name, {"depts": None})["depts"]
-    return depts is None or core.AGENTS.get(agent_id, {}).get("department") in depts
+def can_decide(name: str, agent_id: str, importo=None) -> bool:
+    a = _approvers().get(name, {"depts": None, "limit": None, "role": "approver"})
+    if a.get("role", "approver") == "viewer":
+        return False
+    depts = a["depts"]
+    if depts is not None and core.AGENTS.get(agent_id, {}).get("department") not in depts:
+        return False
+    lim = a.get("limit")
+    if lim is not None and importo is not None and importo > lim:
+        return False  # matrice deleghe di firma: sopra il proprio limite non si firma
+    return True
 
 CSS = """
 *{box-sizing:border-box}
@@ -158,6 +179,8 @@ button{font:inherit;font-size:14.5px;border-radius:6px;padding:9px 22px;cursor:p
         letter-spacing:.07em;font-weight:600}
 .bucket-warn{color:#96352B}
 .age-warn{color:#96352B;font-weight:600}
+.consiglio{font-size:13px;color:#22593F;background:#E6EFE6;border-radius:4px;
+           padding:4px 10px;display:inline-block;margin-bottom:10px}
 .card.focused{border-color:#22593F;box-shadow:0 0 0 2.5px rgba(34,89,63,.28)}
 textarea{font:inherit;width:100%;border:1px solid #D7DFD6;border-radius:5px;
          padding:8px;margin:8px 0;font-size:13.5px}
@@ -374,6 +397,9 @@ def frase_attivita(r) -> tuple:
     if a == "chiarimenti":
         chi_v = "Hai chiesto" if chi == "Tu" else f"{chi} ha chiesto"
         return f"{chi_v} una modifica su {label}: la richiesta torna all'assistente", ""
+    if a == "prima-firma":
+        chi_v = "Hai messo" if chi == "Tu" else f"{chi} ha messo"
+        return f"{chi_v} la prima firma su {sing} — ne serve una seconda", ""
     if a == "regola":
         chi_v = "Hai creato" if chi == "Tu" else f"{chi} ha creato"
         return f"{chi_v} una regola di autonomia su {label}", ""
@@ -397,6 +423,23 @@ def pending_rows(agent_id: str | None = None) -> list:
                          "ORDER BY id").fetchall()
 
 
+def steps_list_html(parts: list) -> str:
+    out = []
+    for i, (label, cls) in enumerate(parts):
+        if i:
+            out.append("<span class='step-sep'>&#8594;</span>")
+        out.append(f"<span class='step {cls}'>{html.escape(label)}</span>")
+    return f"<div class='steps'>{''.join(out)}</div>"
+
+
+def consigliata(r) -> int:
+    with core.db() as c:
+        return c.execute(
+            "SELECT COUNT(*) FROM approvals WHERE agent=? AND entity=? "
+            "AND status IN ('approvata','auto-approvata')",
+            (r["agent"], r["entity"])).fetchone()[0]
+
+
 def pending_card(r, who: str = "Tu") -> str:
     verbo = AZIONE_VERBO.get(r["action"], r["action"])
     target = ent(r["entity"], "singolare")
@@ -406,7 +449,27 @@ def pending_card(r, who: str = "Tu") -> str:
             if editabile else "")
     eta_txt, eta_cls = eta(r["ts"])
     attesa = f' &middot; <span class="{eta_cls}">in attesa da {eta_txt}</span>' if eta_txt else ""
-    if can_decide(who, r["agent"]):
+    importo = _importo(r)
+    doppia = r["doppia"] if "doppia" in r.keys() else 0
+    approvers = _approvers()
+    chi_puo = ""
+    if approvers:
+        nomi = [n for n in approvers if can_decide(n, r["agent"], importo)]
+        chi_puo = (f'<div class="req-when">Può decidere: '
+                   f'{html.escape(", ".join(nomi) or "nessuno — controlla deleghe e limiti")}</div>')
+    extra_steps = ""
+    if doppia:
+        with core.db() as c:
+            firmatari = [x[0] for x in c.execute(
+                "SELECT approver FROM firme WHERE approval_id=?", (r["id"],)).fetchall()]
+        p1 = (f"Prima firma: {firmatari[0]} ✓", "done") if firmatari else ("Prima firma", "step")
+        extra_steps = steps_list_html([("Richiesta ricevuta", "done"), p1,
+                                       ("Seconda firma", "step"), ("Gestionale", "step")])
+    badge_ok = ""
+    if not doppia and consigliata(r) >= 3:
+        badge_ok = (f'<div class="consiglio">Approvazione consigliata — questo assistente ha '
+                    f'già {consigliata(r)} richieste simili approvate</div>')
+    if can_decide(who, r["agent"], importo):
         ricorda = ""
         campo_chiave = core.ENTITIES.get(r["entity"], {}).get("campo_chiave")
         try:
@@ -429,18 +492,26 @@ def pending_card(r, who: str = "Tu") -> str:
               <button class="rifiuta" name="azione" value="chiarimenti">Rimanda all'assistente</button>
             </details>"""
     else:
-        bottoni = (f'<div class="edit-hint">Fuori dalla tua delega: la approva '
-                   f'chi segue il reparto {html.escape(agent_dept(r["agent"]))}.</div>')
+        role = _approvers().get(who, {}).get("role", "approver")
+        msg = ("Il tuo accesso è di sola visualizzazione." if role == "viewer" else
+               f"Fuori dalla tua delega o sopra il tuo limite di firma: la approva "
+               f"chi segue il reparto {agent_dept(r['agent'])}.")
+        bottoni = f'<div class="edit-hint">{html.escape(msg)}</div>'
+    motivo = motivo_richiesta(r)
+    if doppia:
+        motivo += " · richiede la firma di due approvatori diversi (4 occhi)"
     return f"""<div class="card" data-rid="{r['id']}">
       <div class="req-head"><b>{html.escape(agent_label(r['agent']))}</b>
         &middot; {html.escape(agent_dept(r['agent']))} &mdash; {verbo} <b>{html.escape(target)}</b>{rif}</div>
       <div class="req-when">richiesta n. {r['id']} &middot; {html.escape(r['ts'])}{attesa}</div>
-      <div class="motivo">{html.escape(motivo_richiesta(r))}</div>
+      {chi_puo}
+      <div class="motivo">{html.escape(motivo)}</div>
+      {badge_ok}
       <form method="post" action="/decide">
         <input type="hidden" name="id" value="{r['id']}">
         <div class="kvbox">{campi}</div>
         {hint}
-        {steps_html('pending')}
+        {extra_steps or steps_html('pending')}
         <details class="tech"><summary>Dettagli tecnici</summary><pre>{html.escape(r['payload'] or '')}</pre></details>
         {bottoni}
       </form>
@@ -650,8 +721,11 @@ async def home(request):
         return RedirectResponse("/login", status_code=303)
     rows = pending_rows()
     n = len(rows)
-    urgenti = [r for r in rows if tg_urgent(r)]
-    ordinarie = [r for r in rows if not tg_urgent(r)]
+
+    def _rischio(r):
+        return tg_urgent(r) or (r["doppia"] if "doppia" in r.keys() else 0)
+    urgenti = [r for r in rows if _rischio(r)]
+    ordinarie = [r for r in rows if not _rischio(r)]
     count_cls = "count" if n else "count zero"
     sezioni = ""
     if urgenti:
@@ -843,8 +917,9 @@ async def decide_all(request):
     if who is None:
         return RedirectResponse("/login", status_code=303)
     for r in pending_rows():
-        if not can_decide(who, r["agent"]) or tg_urgent(r):
-            continue  # le "da guardare bene" non entrano mai nel blocco
+        doppia = r["doppia"] if "doppia" in r.keys() else 0
+        if not can_decide(who, r["agent"], _importo(r)) or tg_urgent(r) or doppia:
+            continue  # le "da guardare bene" e le doppie firme non entrano mai nel blocco
         try:
             core.decide(r["id"], True, note=" in blocco", decided_by=who)
         except Exception:  # errori tracciati per singola richiesta
@@ -862,8 +937,8 @@ async def decide(request):
     note = ""
     try:
         with core.db() as c:
-            row = c.execute("SELECT agent FROM approvals WHERE id=?", (rid,)).fetchone()
-        if row and not can_decide(who, row["agent"]):
+            row = c.execute("SELECT * FROM approvals WHERE id=?", (rid,)).fetchone()
+        if row and not can_decide(who, row["agent"], _importo(row)):
             core.audit(who, "decisione", detail=f"richiesta #{rid} fuori delega",
                        status="negato")
         elif azione == "chiarimenti":
@@ -980,16 +1055,38 @@ async def tg_loop():
                                      "AND notified=0 ORDER BY id").fetchall()
                 for r in rows:
                     urgent = tg_urgent(r)
-                    if digest and not urgent and not digest_due(time.strftime("%H:%M"), digest):
+                    doppia = r["doppia"] if "doppia" in r.keys() else 0
+                    if (digest and not urgent and not doppia
+                            and not digest_due(time.strftime("%H:%M"), digest)):
                         continue  # le richieste ordinarie aspettano il prossimo digest
                     body = {"chat_id": TG_CHAT, "text": tg_text(r)}
-                    if urgent:
+                    if doppia:
+                        body["text"] += "\n🖊 Doppia firma richiesta: si decide solo dalla dashboard"
+                    elif urgent:
                         body["text"] += "\n⚠️ Importo alto: conferma dalla dashboard"
                     else:
                         body["reply_markup"] = tg_keyboard(r["id"])
                     await cl.post(f"{api}/sendMessage", json=body)
                     with core.db() as c:
                         c.execute("UPDATE approvals SET notified=1 WHERE id=?", (r["id"],))
+                # promemoria su inazione (mai auto-approvazione: solo un ping)
+                remind_h = float(os.environ.get("VARCO_REMIND_ORE", "24"))
+                with core.db() as c:
+                    vecchie = c.execute("SELECT * FROM approvals WHERE status='pending' "
+                                        "AND notified=1 AND reminded=0").fetchall()
+                for r in vecchie:
+                    try:
+                        anz = time.time() - time.mktime(
+                            time.strptime(r["ts"], "%Y-%m-%d %H:%M:%S"))
+                    except ValueError:
+                        continue
+                    if anz < remind_h * 3600:
+                        continue
+                    await cl.post(f"{api}/sendMessage", json={
+                        "chat_id": TG_CHAT,
+                        "text": f"⏰ Ancora in attesa da {int(anz // 3600)} ore:\n" + tg_text(r)})
+                    with core.db() as c:
+                        c.execute("UPDATE approvals SET reminded=1 WHERE id=?", (r["id"],))
                 resp = await cl.get(f"{api}/getUpdates",
                                     params={"offset": offset, "timeout": 20})
                 for u in resp.json().get("result", []):

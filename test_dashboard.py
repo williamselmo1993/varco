@@ -190,4 +190,54 @@ with core.db() as db_:
     assert db_.execute("SELECT status FROM approvals WHERE id=?",
                        (rr3,)).fetchone()[0] == "pending"
 
+# --- multi-user: doppia firma, limiti, ruoli, puo'-decidere -----------------
+os.environ["VARCO_APPROVERS"] = "w:k1:*:5000:admin;v:k2:vendite::viewer"
+p = dash._parse_approvers()
+assert p["w"]["limit"] == 5000 and p["w"]["role"] == "admin"
+assert p["v"]["role"] == "viewer" and p["v"]["limit"] is None
+del os.environ["VARCO_APPROVERS"]
+
+c4 = TestClient(dash.app)
+dash.APPROVERS = {
+    "anna": {"key": "kA", "depts": None, "limit": 2000.0, "role": "approver"},
+    "will": {"key": "kW", "depts": None, "limit": None, "role": "approver"},
+    "boss": {"key": "kB", "depts": None, "limit": None, "role": "approver"},
+    "revisore": {"key": "kR", "depts": None, "limit": None, "role": "viewer"},
+}
+rid4e = core.request_write("assistente-vendite", "create", "ordini", None,
+                          {"numero": "OD-UI4", "cliente": "Verdi Impianti Snc",
+                           "totale": 15000.0})
+c4.post("/login", data={"chiave": "kW"})
+h4 = c4.get("/").text
+assert "4 occhi" in h4 and "Può decidere:" in h4
+assert "Approvazione consigliata" in h4              # badge sul pending ordinario
+
+# anna (limite 2000) non puo' decidere i 15.000: non compare e il POST e' bloccato
+assert "anna" not in h4.split("Può decidere:")[1].split("</div>")[0]
+c4.post("/login", data={"chiave": "kA"})
+c4.post("/decide", data={"id": str(rid4e), "azione": "approva"})
+with core.db() as db_:
+    assert db_.execute("SELECT status FROM approvals WHERE id=?",
+                       (rid4e,)).fetchone()[0] == "pending"
+
+# viewer: sola visualizzazione, POST bloccato
+c4.post("/login", data={"chiave": "kR"})
+assert "sola visualizzazione" in c4.get("/").text
+c4.post("/decide", data={"id": str(rid4e), "azione": "approva"})
+with core.db() as db_:
+    assert db_.execute("SELECT status FROM approvals WHERE id=?",
+                       (rid4e,)).fetchone()[0] == "pending"
+
+# 4 occhi via web: will firma (resta pending), boss chiude
+c4.post("/login", data={"chiave": "kW"})
+c4.post("/decide", data={"id": str(rid4e), "azione": "approva"})
+h4b = c4.get("/").text
+assert "Prima firma: will" in h4b and "la prima firma" in c4.get("/attivita").text
+c4.post("/login", data={"chiave": "kB"})
+c4.post("/decide", data={"id": str(rid4e), "azione": "approva"})
+with core.db() as db_:
+    assert db_.execute("SELECT status FROM approvals WHERE id=?",
+                       (rid4e,)).fetchone()[0] == "approvata"
+dash.APPROVERS = {}
+
 print("OK")

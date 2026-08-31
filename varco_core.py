@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS mock_records (
 CREATE TABLE IF NOT EXISTS auto_rules (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, agent TEXT, action TEXT,
   entity TEXT, campo TEXT, valore TEXT);
+CREATE TABLE IF NOT EXISTS firme (
+  approval_id INTEGER, approver TEXT, ts TEXT, UNIQUE (approval_id, approver));
 """
 
 
@@ -43,10 +45,12 @@ def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
-    try:  # migrazione: flag notifica Telegram sui DB esistenti
-        conn.execute("ALTER TABLE approvals ADD COLUMN notified INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
+    for col in ("notified INTEGER DEFAULT 0", "doppia INTEGER DEFAULT 0",
+                "reminded INTEGER DEFAULT 0"):  # migrazioni additive sui DB esistenti
+        try:
+            conn.execute(f"ALTER TABLE approvals ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
     return conn
 
 
@@ -332,22 +336,36 @@ def add_rule(agent: str, action: str, entity: str, data: dict, created_by: str =
     return True
 
 
+def dual_required(agent: str, entity: str, data: dict) -> bool:
+    """Sopra soglia_doppia servono due firme distinte (principio dei 4 occhi)."""
+    soglia = AGENTS[agent].get("soglia_doppia", {}).get(entity)
+    campo = ENTITIES[entity].get("campo_importo")
+    if soglia is None or not campo or campo not in data:
+        return False
+    try:
+        return float(data[campo]) > float(soglia)
+    except (TypeError, ValueError):
+        return False
+
+
 def request_write(agent: str, action: str, entity: str, record_id, data: dict) -> int:
     check_write(agent, entity)
+    doppia = 1 if dual_required(agent, entity, data) else 0  # snapshot del regime alla creazione
     with db() as c:
         cur = c.execute(
-            "INSERT INTO approvals (ts, agent, action, entity, record_id, payload) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO approvals (ts, agent, action, entity, record_id, payload, doppia) "
+            "VALUES (?,?,?,?,?,?,?)",
             (now(), agent, action, entity, str(record_id or ""),
-             json.dumps(data, ensure_ascii=False)))
+             json.dumps(data, ensure_ascii=False), doppia))
         rid = cur.lastrowid
     motivo = ""
-    if policy_auto_approve(agent, entity, data):
-        motivo = "entro soglia di autonomia"
-    else:
-        m = rule_matches(agent, action, entity, data)
-        if m:
-            motivo = f"regola: {m[0]} = {m[1]}"
+    if not doppia:  # sopra la soglia doppia nessuna scorciatoia: sempre due umani
+        if policy_auto_approve(agent, entity, data):
+            motivo = "entro soglia di autonomia"
+        else:
+            m = rule_matches(agent, action, entity, data)
+            if m:
+                motivo = f"regola: {m[0]} = {m[1]}"
     if not motivo:
         audit(agent, f"richiesta-{action}", entity, record_id or "",
               json.dumps(data, ensure_ascii=False), "in-attesa")
@@ -371,7 +389,13 @@ def ask_changes(approval_id: int, question: str, decided_by: str = "umano") -> N
                         (approval_id,)).fetchone()
     if not row:
         raise ValueError(f"Richiesta {approval_id} inesistente o gia' decisa")
-    _close(approval_id, "chiarimenti", question[:500])
+    with db() as c:  # claim atomico anche qui
+        claimed = c.execute(
+            "UPDATE approvals SET status='chiarimenti', decided_ts=?, result=? "
+            "WHERE id=? AND status='pending'",
+            (now(), question[:500], approval_id)).rowcount
+    if not claimed:
+        raise ValueError(f"Richiesta {approval_id} gia' decisa da un altro approvatore")
     audit(decided_by, "chiarimenti", row["entity"], row["record_id"],
           f"richiesta #{approval_id}: {question[:200]}")
 
@@ -387,15 +411,42 @@ def update_payload(approval_id: int, data: dict) -> None:
 
 def decide(approval_id: int, approve: bool, note: str = "", decided_by: str = "umano") -> str:
     with db() as c:
-        row = c.execute("SELECT * FROM approvals WHERE id=? AND status='pending'",
-                        (approval_id,)).fetchone()
+        row = c.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
     if not row:
-        raise ValueError(f"Richiesta {approval_id} inesistente o gia' decisa")
+        raise ValueError(f"Richiesta {approval_id} inesistente")
+    if row["status"] != "pending":
+        raise ValueError(f"Richiesta {approval_id} gia' decisa ({row['status']})")
     if not approve:
-        _close(approval_id, "rifiutata", "")
+        with db() as c:  # claim atomico: chi arriva secondo (web vs Telegram) trova gia' deciso
+            claimed = c.execute(
+                "UPDATE approvals SET status='rifiutata', decided_ts=?, result='' "
+                "WHERE id=? AND status='pending'", (now(), approval_id)).rowcount
+        if not claimed:
+            raise ValueError(f"Richiesta {approval_id} gia' decisa da un altro approvatore")
         audit(decided_by, "rifiuto", row["entity"], row["record_id"],
               f"richiesta #{approval_id}{note}")
         return "rifiutata"
+    if row["doppia"]:
+        try:
+            with db() as c:  # UNIQUE(approval_id, approver): la stessa persona non firma due volte
+                c.execute("INSERT INTO firme (approval_id, approver, ts) VALUES (?,?,?)",
+                          (approval_id, decided_by, now()))
+        except sqlite3.IntegrityError:
+            raise ValueError("Hai gia' firmato questa richiesta: "
+                             "serve un secondo approvatore diverso")
+        with db() as c:
+            nf = c.execute("SELECT COUNT(*) FROM firme WHERE approval_id=?",
+                           (approval_id,)).fetchone()[0]
+        if nf < 2:
+            audit(decided_by, "prima-firma", row["entity"], row["record_id"],
+                  f"richiesta #{approval_id}: prima firma registrata, ne serve una seconda")
+            return "prima-firma"
+        note = note + " (doppia firma)"
+    with db() as c:  # claim atomico dell'esecuzione
+        claimed = c.execute("UPDATE approvals SET status='in-corso' "
+                            "WHERE id=? AND status='pending'", (approval_id,)).rowcount
+    if not claimed:
+        raise ValueError(f"Richiesta {approval_id} gia' decisa da un altro approvatore")
     try:
         with db() as c:  # ricarica: il payload puo' essere stato modificato dall'approvatore
             row = c.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()

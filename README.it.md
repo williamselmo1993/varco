@@ -84,11 +84,21 @@ Due controlli in più:
 
 - **`VARCO_ACCESS_KEY`**: se impostata, la dashboard richiede il login
   (chiave unica, cookie firmato 30 giorni). Senza, resta aperta per la demo.
-- **`VARCO_APPROVERS`**: più approvatori con deleghe per reparto, formato
-  `nome:chiave:reparti` separati da `;` (`*` = tutti i reparti). Esempio:
-  `william:kW:*;anna:kA:amministrazione,acquisti`. Ognuno vede tutto ma
-  approva solo i reparti delegati; ogni decisione porta il suo nome
-  nell'audit.
+- **`VARCO_APPROVERS`**: più approvatori, formato
+  `nome:chiave:reparti[:limite€][:ruolo]` separati da `;` (`*` = tutti i
+  reparti; ruolo `approver` di default, `viewer` = sola visualizzazione, es.
+  per il commercialista). Esempio:
+  `william:kW:*;anna:kA:amministrazione,acquisti:2000;revisore:kR:*::viewer`.
+  Ognuno vede tutto ma approva solo i reparti delegati ed entro il proprio
+  limite di firma; ogni decisione porta il suo nome nell'audit e ogni card
+  mostra "Può decidere: …".
+- **Doppia firma (4 occhi)**: con `soglia_doppia` per agente nel config,
+  sopra quell'importo servono le firme di **due approvatori diversi** —
+  la prima firma resta tracciata, la seconda esegue. Niente one-tap
+  Telegram, niente approvazione in blocco, nessuna scorciatoia di autonomia.
+  Il claim è atomico: web e Telegram non possono mai decidere due volte.
+- **Promemoria su inazione** (`VARCO_REMIND_ORE`, default 24): le richieste
+  ferme vengono rinotificate su Telegram — mai auto-approvate.
 - **Approva tutte**: con più richieste in attesa compare il bottone di
   approvazione in blocco (solo su quelle nella propria delega).
 - **Metriche in Panoramica**: azioni eseguite, quante in autonomia, stima del
