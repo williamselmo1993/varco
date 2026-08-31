@@ -12,7 +12,9 @@ custom agents) and your backend (ERP, or any REST/Odoo system) and enforces:
   Conservative by design: no threshold, no readable amount → always ask.
 - **Human approval with review-and-edit** — approvers see the request in
   plain language, can fix values before approving, and decide with one tap
-  from the web app or **Telegram** (WhatsApp next).
+  from the web app or **Telegram** (WhatsApp next). Bulk approve, scheduled
+  digests (`TELEGRAM_DIGEST`), and a second web-only threshold
+  (`soglia_web`) for high amounts: no one-tap above it.
 - **Full audit trail** — every read, request, approval, rejection and
   auto-execution is recorded. Built for EU AI Act art. 14-style human
   oversight.
@@ -49,9 +51,10 @@ claude mcp add varco --scope project -e VARCO_AGENT=assistente-vendite -- <path>
 Everything lives in `varco_config.json`: backend (`mock`, REST base URL, or
 `"tipo": "odoo"` — see [varco_config.odoo.json](varco_config.odoo.json) for a
 ready-made Odoo mapping), entities, departments, agents with `read`/`write`
-permissions and `soglie` (autonomy thresholds per entity). Secrets never go
-in the config: API keys via `ERP_API_TOKEN`, Telegram via
-`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`.
+permissions, `soglie` (autonomy thresholds) and `soglia_web` (web-only
+confirmation above this amount). Secrets never go in the config: API keys via
+`ERP_API_TOKEN`, Telegram via `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`,
+dashboard login via `VARCO_ACCESS_KEY` (open demo mode when unset).
 
 ## Tests
 

@@ -7,9 +7,12 @@ sull'ERP passa da un "Approva" umano.
 """
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import html
 import json
 import os
+import time
 
 import httpx
 import uvicorn
@@ -19,7 +22,19 @@ from starlette.routing import Route
 
 import varco_core as core
 
-# ponytail: nessun login, bind solo 127.0.0.1 — demo locale; auth prima di esporla in rete
+# Accesso: con env VARCO_ACCESS_KEY la dashboard richiede login (chiave unica
+# condivisa, cookie firmato). Senza, resta aperta per la demo locale.
+ACCESS_KEY = os.environ.get("VARCO_ACCESS_KEY", "")
+
+
+def _session_token() -> str:
+    return hmac.new(ACCESS_KEY.encode(), b"varco-session", hashlib.sha256).hexdigest()
+
+
+def authed(request) -> bool:
+    if not ACCESS_KEY:
+        return True  # ponytail: senza chiave, demo locale aperta su 127.0.0.1
+    return hmac.compare_digest(request.cookies.get("varco", ""), _session_token())
 
 CSS = """
 *{box-sizing:border-box}
@@ -90,6 +105,10 @@ button{font:inherit;font-size:14.5px;border-radius:6px;padding:9px 22px;cursor:p
 .agent-card ul{margin:0;padding-left:18px;font-size:14px}
 .agent-card li{margin:3px 0}
 .agent-card .scope{font-size:12.5px;color:#22593F;margin-top:8px}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:4px 0 10px}
+.tile{background:#fff;border:1px solid #D7DFD6;border-radius:8px;padding:13px 15px}
+.tile .n{font-weight:800;font-size:23px;color:#22593F;font-variant-numeric:tabular-nums}
+.tile .l{font-size:12px;color:#56675C;margin-top:2px}
 .feed{background:#fff;border:1px solid #D7DFD6;border-radius:8px;padding:6px 18px}
 .evt{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid #EFF3EE;font-size:14px;
      align-items:baseline}
@@ -110,6 +129,7 @@ table.data tr:last-child td{border-bottom:none}
   aside{width:100%}
   main{padding:20px 16px 50px}
   .kv span{min-width:100px}
+  .tiles{grid-template-columns:1fr 1fr}
 }
 """
 
@@ -338,8 +358,13 @@ def agent_card(aid: str, link: bool = True) -> str:
     if a.get("soglie"):
         parti = " e ".join(f"fino a € {v:,.0f}".replace(",", ".") + f" su {ent(e, 'label')}"
                            for e, v in a["soglie"].items())
+        extra = ""
+        if a.get("soglia_web"):
+            partiw = " e ".join(f"€ {v:,.0f}".replace(",", ".") + f" su {ent(e, 'label')}"
+                                for e, v in a["soglia_web"].items())
+            extra = f"; sopra {partiw} conferma solo dalla dashboard"
         autonomy = (f'<div class="autonomy">Autonomia: esegue da solo {html.escape(parti)}; '
-                    f'oltre, chiede a te</div>')
+                    f'oltre, chiede a te{html.escape(extra)}</div>')
     name = html.escape(a.get("label", aid))
     if link:
         name = f'<a href="/agente/{aid}">{name}</a>'
@@ -397,13 +422,37 @@ def layout(title: str, path: str, body: str, refresh: bool = False) -> str:
 
 # ---------------------------------------------------------------- pagine
 
+def stat_tiles() -> str:
+    with core.db() as c:
+        auto = c.execute("SELECT COUNT(*) FROM approvals WHERE status='auto-approvata'").fetchone()[0]
+        appr = c.execute("SELECT COUNT(*) FROM approvals WHERE status='approvata'").fetchone()[0]
+        rif = c.execute("SELECT COUNT(*) FROM approvals WHERE status='rifiutata'").fetchone()[0]
+    minuti = (auto + appr) * int(os.environ.get("VARCO_MIN_PER_AZIONE", "5"))
+    tempo = f"{minuti // 60}h {minuti % 60:02d}m" if minuti >= 60 else f"{minuti}m"
+    tiles = [(auto + appr, "azioni eseguite sul gestionale"),
+             (auto, "in autonomia, senza disturbarti"),
+             (tempo, "tempo risparmiato (stima)"),
+             (rif, "fermate da te")]
+    return "<div class='tiles'>" + "".join(
+        f"<div class='tile'><div class='n'>{v}</div><div class='l'>{l}</div></div>"
+        for v, l in tiles) + "</div>"
+
+
 async def home(request):
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
     cards, n = pending_cards()
     count_cls = "count" if n else "count zero"
+    bulk = ""
+    if n > 1:
+        bulk = f"""<form method="post" action="/decide_all" style="margin-bottom:12px">
+          <button class="approva">Approva tutte ({n})</button></form>"""
     body = f"""
       <h1>Panoramica</h1>
       <p class="sub">Quando un assistente vuole scrivere sul gestionale, prima chiede a te.</p>
+      {stat_tiles()}
       <h2>Da approvare <span class="{count_cls}">{n}</span></h2>
+      {bulk}
       {cards}
       <h2>Processi recenti</h2>
       {procs_html()}
@@ -413,6 +462,8 @@ async def home(request):
 
 
 async def reparto(request):
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
     dep_id = request.path_params["dep"]
     if dep_id not in core.DEPARTMENTS:
         return RedirectResponse("/", status_code=303)
@@ -428,6 +479,8 @@ async def reparto(request):
 
 
 async def agente(request):
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
     aid = request.path_params["aid"]
     if aid not in core.AGENTS:
         return RedirectResponse("/", status_code=303)
@@ -448,6 +501,8 @@ async def agente(request):
 
 
 async def dati(request):
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
     entity = request.path_params["entity"]
     if entity not in core.ENTITIES:
         return RedirectResponse("/", status_code=303)
@@ -491,6 +546,8 @@ async def dati(request):
 
 
 async def attivita(request):
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
     body = f"""
       <h1>Attivit&agrave;</h1>
       <p class="sub">Tutto quello che i tuoi assistenti hanno fatto, in ordine di tempo.</p>
@@ -498,7 +555,57 @@ async def attivita(request):
     return HTMLResponse(layout("attività", "/attivita", body, refresh=True))
 
 
+def login_page(err: str = "") -> str:
+    msg = f'<p style="color:#96352B;font-size:14px">{html.escape(err)}</p>' if err else ""
+    return f"""<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Varco &mdash; accesso</title><style>{CSS}
+.box{{max-width:360px;margin:14vh auto;background:#fff;border:1px solid #D7DFD6;
+     border-radius:10px;padding:30px 32px}}
+.box input{{font:inherit;width:100%;padding:10px 12px;border:1.5px solid #D7DFD6;
+           border-radius:6px;margin:14px 0}}
+.box input:focus{{border-color:#22593F;outline:none}}</style></head>
+<body style="display:block">
+<div class="box">
+  <div class="wordmark" style="font-family:'Segoe UI';font-weight:800;letter-spacing:.06em">
+    VARCO<span style="color:#22593F">&#9134;</span></div>
+  <p style="color:#56675C;font-size:14px;margin:8px 0 0">Inserisci la chiave di accesso.</p>
+  {msg}
+  <form method="post" action="/login">
+    <input type="password" name="chiave" autofocus autocomplete="current-password">
+    <button class="approva" style="width:100%">Entra</button>
+  </form>
+</div></body></html>"""
+
+
+async def login(request):
+    if request.method == "POST":
+        form = await request.form()
+        if ACCESS_KEY and hmac.compare_digest(form.get("chiave", ""), ACCESS_KEY):
+            resp = RedirectResponse("/", status_code=303)
+            resp.set_cookie("varco", _session_token(), httponly=True, max_age=30 * 86400)
+            return resp
+        return HTMLResponse(login_page("Chiave di accesso errata"), status_code=401)
+    return HTMLResponse(login_page())
+
+
+async def decide_all(request):
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
+    with core.db() as c:
+        ids = [r[0] for r in c.execute(
+            "SELECT id FROM approvals WHERE status='pending' ORDER BY id").fetchall()]
+    for i in ids:
+        try:
+            core.decide(i, True, note=" in blocco")
+        except Exception:  # errori tracciati per singola richiesta
+            pass
+    return RedirectResponse(request.headers.get("referer") or "/", status_code=303)
+
+
 async def decide(request):
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
     form = await request.form()
     rid = int(form["id"])
     approve = form["azione"] == "approva"
@@ -539,9 +646,26 @@ def tg_keyboard(rid: int) -> dict:
     ]]}
 
 
+def tg_urgent(r) -> bool:
+    """Sopra soglia_web: notifica subito ma senza one-tap, si conferma dalla dashboard."""
+    soglia = core.AGENTS.get(r["agent"], {}).get("soglia_web", {}).get(r["entity"])
+    campo = core.ENTITIES.get(r["entity"], {}).get("campo_importo")
+    if soglia is None or not campo:
+        return False
+    try:
+        return float(json.loads(r["payload"]).get(campo, 0)) > float(soglia)
+    except (ValueError, TypeError):
+        return False
+
+
+def digest_due(hhmm: str, times: list) -> bool:
+    return hhmm in times
+
+
 async def tg_loop():
     api = f"https://api.telegram.org/bot{TG_TOKEN}"
     offset = 0
+    digest = [t.strip() for t in os.environ.get("TELEGRAM_DIGEST", "").split(",") if t.strip()]
     async with httpx.AsyncClient(timeout=30) as cl:
         while True:
             try:
@@ -549,9 +673,15 @@ async def tg_loop():
                     rows = c.execute("SELECT * FROM approvals WHERE status='pending' "
                                      "AND notified=0 ORDER BY id").fetchall()
                 for r in rows:
-                    await cl.post(f"{api}/sendMessage", json={
-                        "chat_id": TG_CHAT, "text": tg_text(r),
-                        "reply_markup": tg_keyboard(r["id"])})
+                    urgent = tg_urgent(r)
+                    if digest and not urgent and not digest_due(time.strftime("%H:%M"), digest):
+                        continue  # le richieste ordinarie aspettano il prossimo digest
+                    body = {"chat_id": TG_CHAT, "text": tg_text(r)}
+                    if urgent:
+                        body["text"] += "\n⚠️ Importo alto: conferma dalla dashboard"
+                    else:
+                        body["reply_markup"] = tg_keyboard(r["id"])
+                    await cl.post(f"{api}/sendMessage", json=body)
                     with core.db() as c:
                         c.execute("UPDATE approvals SET notified=1 WHERE id=?", (r["id"],))
                 resp = await cl.get(f"{api}/getUpdates",
@@ -591,11 +721,13 @@ async def lifespan(app):
 
 app = Starlette(routes=[
     Route("/", home),
+    Route("/login", login, methods=["GET", "POST"]),
     Route("/reparto/{dep}", reparto),
     Route("/agente/{aid}", agente),
     Route("/dati/{entity}", dati),
     Route("/attivita", attivita),
     Route("/decide", decide, methods=["POST"]),
+    Route("/decide_all", decide_all, methods=["POST"]),
 ], lifespan=lifespan)
 
 if __name__ == "__main__":

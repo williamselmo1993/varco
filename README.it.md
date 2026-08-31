@@ -73,6 +73,23 @@ messaggio e nell'audit ("via Telegram"). Senza env, il canale resta spento.
 Solo la chat configurata riceve e può decidere. WhatsApp Business è il passo
 successivo (richiede approvazione Meta).
 
+Due controlli in più:
+- **`soglia_web`** (per agente nel config): sopra quell'importo il messaggio
+  Telegram arriva senza bottoni — la conferma si fa solo dalla dashboard.
+- **`TELEGRAM_DIGEST`** (es. `09:00,14:00,17:30`): le richieste ordinarie si
+  accumulano e partono solo a quegli orari; sopra `soglia_web` la notifica è
+  sempre immediata.
+
+### Accesso, blocco e metriche
+
+- **`VARCO_ACCESS_KEY`**: se impostata, la dashboard richiede il login
+  (chiave unica, cookie firmato 30 giorni). Senza, resta aperta per la demo.
+- **Approva tutte**: con più richieste in attesa compare il bottone di
+  approvazione in blocco.
+- **Metriche in Panoramica**: azioni eseguite, quante in autonomia, stima del
+  tempo risparmiato (`VARCO_MIN_PER_AZIONE`, default 5 minuti/azione) e
+  richieste fermate.
+
 ## Demo per i titolari (5 minuti, senza ERP reale)
 
 Il config di default punta all'ERP finto (`"base_url": "mock"`) con clienti,

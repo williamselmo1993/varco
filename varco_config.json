@@ -31,7 +31,8 @@
       ],
       "read": ["clienti", "ordini", "fatture"],
       "write": ["ordini", "clienti"],
-      "soglie": { "ordini": 1000 }
+      "soglie": { "ordini": 1000 },
+      "soglia_web": { "ordini": 5000 }
     },
     "sollecitatore": {
       "department": "amministrazione",
@@ -67,7 +68,8 @@
       ],
       "read": ["fornitori", "articoli", "ordini_acquisto"],
       "write": ["ordini_acquisto"],
-      "soglie": { "ordini_acquisto": 300 }
+      "soglie": { "ordini_acquisto": 300 },
+      "soglia_web": { "ordini_acquisto": 2000 }
     },
     "controllo-scorte": {
       "department": "magazzino",

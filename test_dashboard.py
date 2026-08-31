@@ -64,4 +64,33 @@ assert "Assistente Vendite" in t and "#9" in t and "Totale: 120.0" in t
 kb = dash.tg_keyboard(9)
 assert kb["inline_keyboard"][0][0]["callback_data"] == "a:9"
 
+# soglia_web: sopra 5000 su ordini niente one-tap; digest: gate sull'orario
+alta = dict(riga, payload='{"numero": "OD-BIG", "totale": 9000.0}')
+assert dash.tg_urgent(alta) and not dash.tg_urgent(riga)
+assert dash.digest_due("09:00", ["09:00", "14:00"]) and not dash.digest_due("09:01", ["09:00"])
+
+# metriche ROI in home
+home2 = c.get("/").text
+assert "tempo risparmiato" in home2 and "in autonomia" in home2
+
+# approvazione in blocco: due pending -> bottone -> tutte approvate
+r1 = core.request_write("assistente-vendite", "create", "ordini", None,
+                        {"numero": "OD-B1", "cliente": "Rossi Costruzioni Srl", "totale": 3000.0})
+r2 = core.request_write("assistente-vendite", "create", "ordini", None,
+                        {"numero": "OD-B2", "cliente": "Verdi Impianti Snc", "totale": 2000.0})
+assert "Approva tutte (2)" in c.get("/").text
+c.post("/decide_all", follow_redirects=True)
+with core.db() as db_:
+    stati = {row[0] for row in db_.execute(
+        "SELECT status FROM approvals WHERE id IN (?,?)", (r1, r2)).fetchall()}
+assert stati == {"approvata"}
+
+# login: con VARCO_ACCESS_KEY le pagine sono protette
+dash.ACCESS_KEY = "chiave-test"
+assert c.get("/", follow_redirects=False).status_code == 303
+assert "errata" in c.post("/login", data={"chiave": "sbagliata"}).text
+ok = c.post("/login", data={"chiave": "chiave-test"}, follow_redirects=False)
+assert ok.status_code == 303
+assert c.get("/").status_code == 200  # il cookie di sessione ora vale
+
 print("OK")
