@@ -14,7 +14,8 @@ import httpx
 
 BASE_DIR = Path(__file__).parent
 CONFIG = json.loads(
-    Path(os.environ.get("VARCO_CONFIG", BASE_DIR / "varco_config.json")).read_text(encoding="utf-8"))
+    Path(os.environ.get("VARCO_CONFIG",
+                        BASE_DIR / "varco_config.json")).read_text(encoding="utf-8-sig"))
 DB_PATH = Path(os.environ.get("VARCO_DB", BASE_DIR / "varco.db"))
 ERP = CONFIG["erp"]
 ENTITIES = CONFIG["entities"]
@@ -32,6 +33,9 @@ CREATE TABLE IF NOT EXISTS approvals (
   decided_ts TEXT, result TEXT);
 CREATE TABLE IF NOT EXISTS mock_records (
   entity TEXT, id INTEGER, data TEXT, PRIMARY KEY (entity, id));
+CREATE TABLE IF NOT EXISTS auto_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, agent TEXT, action TEXT,
+  entity TEXT, campo TEXT, valore TEXT);
 """
 
 
@@ -300,6 +304,34 @@ def policy_auto_approve(agent: str, entity: str, data: dict) -> bool:
     return 0 <= importo <= float(soglia)
 
 
+def rule_matches(agent: str, action: str, entity: str, data: dict):
+    """(campo, valore) se esiste una regola 'ricorda' per questa richiesta, altrimenti None."""
+    campo = ENTITIES[entity].get("campo_chiave")
+    if not campo or campo not in data:
+        return None
+    with db() as c:
+        row = c.execute(
+            "SELECT id FROM auto_rules WHERE agent=? AND action=? AND entity=? "
+            "AND campo=? AND valore=?",
+            (agent, action, entity, campo, str(data[campo]))).fetchone()
+    return (campo, str(data[campo])) if row else None
+
+
+def add_rule(agent: str, action: str, entity: str, data: dict, created_by: str = "umano") -> bool:
+    campo = ENTITIES[entity].get("campo_chiave")
+    if not campo or campo not in data:
+        return False
+    if rule_matches(agent, action, entity, data):
+        return True
+    with db() as c:
+        c.execute("INSERT INTO auto_rules (ts, agent, action, entity, campo, valore) "
+                  "VALUES (?,?,?,?,?,?)",
+                  (now(), agent, action, entity, campo, str(data[campo])))
+    audit(created_by, "regola", entity,
+          detail=f"auto-approva {action} con {campo} = {data[campo]} per {agent}")
+    return True
+
+
 def request_write(agent: str, action: str, entity: str, record_id, data: dict) -> int:
     check_write(agent, entity)
     with db() as c:
@@ -309,7 +341,14 @@ def request_write(agent: str, action: str, entity: str, record_id, data: dict) -
             (now(), agent, action, entity, str(record_id or ""),
              json.dumps(data, ensure_ascii=False)))
         rid = cur.lastrowid
-    if not policy_auto_approve(agent, entity, data):
+    motivo = ""
+    if policy_auto_approve(agent, entity, data):
+        motivo = "entro soglia di autonomia"
+    else:
+        m = rule_matches(agent, action, entity, data)
+        if m:
+            motivo = f"regola: {m[0]} = {m[1]}"
+    if not motivo:
         audit(agent, f"richiesta-{action}", entity, record_id or "",
               json.dumps(data, ensure_ascii=False), "in-attesa")
         return rid
@@ -317,12 +356,24 @@ def request_write(agent: str, action: str, entity: str, record_id, data: dict) -
         result = erp_execute(action, entity, record_id or None, data)
         _close(rid, "auto-approvata", result)
         audit(agent, "auto-approvazione", entity, record_id or "",
-              f"richiesta #{rid} entro soglia di autonomia, eseguita")
+              f"richiesta #{rid} {motivo}, eseguita")
     except Exception as e:
         _close(rid, "errore", str(e))
         audit(agent, "auto-approvazione", entity, record_id or "",
               f"richiesta #{rid}: {e}", "errore")
     return rid
+
+
+def ask_changes(approval_id: int, question: str, decided_by: str = "umano") -> None:
+    """Terza via oltre approva/rifiuta: rimanda la richiesta all'agente con una nota."""
+    with db() as c:
+        row = c.execute("SELECT * FROM approvals WHERE id=? AND status='pending'",
+                        (approval_id,)).fetchone()
+    if not row:
+        raise ValueError(f"Richiesta {approval_id} inesistente o gia' decisa")
+    _close(approval_id, "chiarimenti", question[:500])
+    audit(decided_by, "chiarimenti", row["entity"], row["record_id"],
+          f"richiesta #{approval_id}: {question[:200]}")
 
 
 def update_payload(approval_id: int, data: dict) -> None:

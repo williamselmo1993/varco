@@ -152,6 +152,19 @@ button{font:inherit;font-size:14.5px;border-radius:6px;padding:9px 22px;cursor:p
 .agent-card ul{margin:0;padding-left:18px;font-size:14px}
 .agent-card li{margin:3px 0}
 .agent-card .scope{font-size:12.5px;color:#22593F;margin-top:8px}
+.motivo{font-size:13px;color:#7A5B0E;background:#FDF3D7;border-radius:4px;
+        padding:4px 10px;display:inline-block;margin-bottom:10px}
+.bucket{font-size:13.5px;margin:20px 0 10px;color:#56675C;text-transform:uppercase;
+        letter-spacing:.07em;font-weight:600}
+.bucket-warn{color:#96352B}
+.age-warn{color:#96352B;font-weight:600}
+.card.focused{border-color:#22593F;box-shadow:0 0 0 2.5px rgba(34,89,63,.28)}
+textarea{font:inherit;width:100%;border:1px solid #D7DFD6;border-radius:5px;
+         padding:8px;margin:8px 0;font-size:13.5px}
+#kbd-help{position:fixed;right:18px;bottom:18px;background:#16211A;color:#E8F0EA;
+          padding:12px 18px;border-radius:8px;font-size:12.5px;display:none;
+          z-index:9;line-height:1.8}
+#kbd-help.show{display:block}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:4px 0 10px}
 .tile{background:#fff;border:1px solid #D7DFD6;border-radius:8px;padding:13px 15px}
 .tile .n{font-weight:800;font-size:23px;color:#22593F;font-variant-numeric:tabular-nums}
@@ -269,6 +282,47 @@ def extract_edits(form, rid: int):
     return out if changed else None
 
 
+def fmtn(v) -> str:
+    return f"{float(v):,.0f}".replace(",", ".")
+
+
+def _importo(r):
+    campo = core.ENTITIES.get(r["entity"], {}).get("campo_importo")
+    if not campo:
+        return None
+    try:
+        return float(json.loads(r["payload"]).get(campo))
+    except (ValueError, TypeError):
+        return None
+
+
+def motivo_richiesta(r) -> str:
+    """Riga 'perche' lo stai vedendo' (pattern Ramp): calcolata dalla policy."""
+    a = core.AGENTS.get(r["agent"], {})
+    importo = _importo(r)
+    soglia = a.get("soglie", {}).get(r["entity"])
+    sw = a.get("soglia_web", {}).get(r["entity"])
+    if importo is not None and sw is not None and importo > sw:
+        return f"Chiede a te perché supera € {fmtn(sw)}: conferma solo da qui, niente one-tap"
+    if importo is not None and soglia is not None and importo > soglia:
+        return f"Chiede a te perché supera la sua soglia di autonomia (€ {fmtn(soglia)})"
+    if soglia is None:
+        return f"Chiede a te perché non ha autonomia su {ent(r['entity'], 'label')}"
+    return "Chiede a te perché l'importo non è leggibile dalla richiesta"
+
+
+def eta(ts: str) -> tuple:
+    try:
+        sec = time.time() - time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return "", ""
+    if sec < 3600:
+        return f"{max(1, int(sec // 60))} min", ""
+    if sec < 86400:
+        return f"{int(sec // 3600)} ore", "age-warn" if sec > 4 * 3600 else ""
+    return f"{int(sec // 86400)} giorni", "age-warn"
+
+
 def passi(status: str) -> list:
     if status == "pending":
         return [("Richiesta ricevuta", "done"), ("In attesa di te", "step"), ("Gestionale", "step")]
@@ -278,6 +332,8 @@ def passi(status: str) -> list:
         return [("Richiesta", "done"), ("Entro soglia di autonomia", "done"), ("Eseguita sul gestionale", "done")]
     if status == "rifiutata":
         return [("Richiesta", "done"), ("Rifiutata da te", "stop"), ("Gestionale non toccato", "step")]
+    if status == "chiarimenti":
+        return [("Richiesta", "done"), ("Modifiche richieste", "stop"), ("In attesa dell'assistente", "step")]
     return [("Richiesta", "done"), ("Approvata da te", "done"), ("Errore sul gestionale", "err")]
 
 
@@ -312,7 +368,18 @@ def frase_attivita(r) -> tuple:
     if a == "auto-approvazione":
         if r["status"] == "errore":
             return f"{chi} ha provato a eseguire {sing} entro soglia, ma il gestionale ha dato errore", "negato"
-        return f"{chi} ha eseguito {sing} da solo — entro la sua soglia di autonomia", ""
+        perche = ("per una regola approvata da te" if "regola:" in (r["detail"] or "")
+                  else "entro la sua soglia di autonomia")
+        return f"{chi} ha eseguito {sing} da solo — {perche}", ""
+    if a == "chiarimenti":
+        chi_v = "Hai chiesto" if chi == "Tu" else f"{chi} ha chiesto"
+        return f"{chi_v} una modifica su {label}: la richiesta torna all'assistente", ""
+    if a == "regola":
+        chi_v = "Hai creato" if chi == "Tu" else f"{chi} ha creato"
+        return f"{chi_v} una regola di autonomia su {label}", ""
+    if a == "regola-revocata":
+        chi_v = "Hai revocato" if chi == "Tu" else f"{chi} ha revocato"
+        return f"{chi_v} una regola di autonomia su {label}", ""
     if a == "rifiuto":
         chi_v = "Hai rifiutato" if chi == "Tu" else f"{chi} ha rifiutato"
         return f"{chi_v} la richiesta su {label}: nulla è stato toccato", ""
@@ -321,41 +388,68 @@ def frase_attivita(r) -> tuple:
 
 # ---------------------------------------------------------------- blocchi
 
-def pending_cards(agent_id: str | None = None, who: str = "Tu") -> tuple:
+def pending_rows(agent_id: str | None = None) -> list:
     with core.db() as c:
         if agent_id:
-            rows = c.execute("SELECT * FROM approvals WHERE status='pending' AND agent=? "
+            return c.execute("SELECT * FROM approvals WHERE status='pending' AND agent=? "
                              "ORDER BY id", (agent_id,)).fetchall()
-        else:
-            rows = c.execute("SELECT * FROM approvals WHERE status='pending' "
-                             "ORDER BY id").fetchall()
-    cards = ""
-    for r in rows:
-        verbo = AZIONE_VERBO.get(r["action"], r["action"])
-        target = ent(r["entity"], "singolare")
-        rif = f" (n. {html.escape(r['record_id'])})" if r["record_id"] else ""
-        campi, editabile = dati_editabili(r["payload"])
-        hint = ('<div class="edit-hint">Puoi correggere i valori prima di approvare.</div>'
-                if editabile else "")
-        if can_decide(who, r["agent"]):
-            bottoni = """<button class="approva" name="azione" value="approva">Approva</button>
-            <button class="rifiuta" name="azione" value="rifiuta">Rifiuta</button>"""
-        else:
-            bottoni = (f'<div class="edit-hint">Fuori dalla tua delega: la approva '
-                       f'chi segue il reparto {html.escape(agent_dept(r["agent"]))}.</div>')
-        cards += f"""<div class="card">
-          <div class="req-head"><b>{html.escape(agent_label(r['agent']))}</b>
-            &middot; {html.escape(agent_dept(r['agent']))} &mdash; {verbo} <b>{html.escape(target)}</b>{rif}</div>
-          <div class="req-when">richiesta n. {r['id']} &middot; {html.escape(r['ts'])}</div>
-          <form method="post" action="/decide">
-            <input type="hidden" name="id" value="{r['id']}">
-            <div class="kvbox">{campi}</div>
-            {hint}
-            {steps_html('pending')}
-            <details class="tech"><summary>Dettagli tecnici</summary><pre>{html.escape(r['payload'] or '')}</pre></details>
-            {bottoni}
-          </form>
-        </div>"""
+        return c.execute("SELECT * FROM approvals WHERE status='pending' "
+                         "ORDER BY id").fetchall()
+
+
+def pending_card(r, who: str = "Tu") -> str:
+    verbo = AZIONE_VERBO.get(r["action"], r["action"])
+    target = ent(r["entity"], "singolare")
+    rif = f" (n. {html.escape(r['record_id'])})" if r["record_id"] else ""
+    campi, editabile = dati_editabili(r["payload"])
+    hint = ('<div class="edit-hint">Puoi correggere i valori prima di approvare.</div>'
+            if editabile else "")
+    eta_txt, eta_cls = eta(r["ts"])
+    attesa = f' &middot; <span class="{eta_cls}">in attesa da {eta_txt}</span>' if eta_txt else ""
+    if can_decide(who, r["agent"]):
+        ricorda = ""
+        campo_chiave = core.ENTITIES.get(r["entity"], {}).get("campo_chiave")
+        try:
+            pdata = json.loads(r["payload"])
+        except (ValueError, TypeError):
+            pdata = {}
+        if campo_chiave and isinstance(pdata, dict) and campo_chiave in pdata:
+            ricorda = (f'<label class="edit-hint" style="display:block;margin:6px 0">'
+                       f'<input type="checkbox" name="ricorda"> Ricorda: approva da solo le '
+                       f'prossime richieste identiche con '
+                       f'{html.escape(campo_chiave.replace("_", " "))} = '
+                       f'<b>{html.escape(str(pdata[campo_chiave]))}</b></label>')
+        bottoni = f"""{ricorda}
+            <button class="approva" name="azione" value="approva">Approva</button>
+            <button class="rifiuta" name="azione" value="rifiuta">Rifiuta</button>
+            <details class="tech" style="display:inline-block;margin-left:8px">
+              <summary>Chiedi una modifica</summary>
+              <textarea name="domanda" rows="2"
+                placeholder="Es. usa il listino 2026 e ricontrolla lo sconto"></textarea>
+              <button class="rifiuta" name="azione" value="chiarimenti">Rimanda all'assistente</button>
+            </details>"""
+    else:
+        bottoni = (f'<div class="edit-hint">Fuori dalla tua delega: la approva '
+                   f'chi segue il reparto {html.escape(agent_dept(r["agent"]))}.</div>')
+    return f"""<div class="card" data-rid="{r['id']}">
+      <div class="req-head"><b>{html.escape(agent_label(r['agent']))}</b>
+        &middot; {html.escape(agent_dept(r['agent']))} &mdash; {verbo} <b>{html.escape(target)}</b>{rif}</div>
+      <div class="req-when">richiesta n. {r['id']} &middot; {html.escape(r['ts'])}{attesa}</div>
+      <div class="motivo">{html.escape(motivo_richiesta(r))}</div>
+      <form method="post" action="/decide">
+        <input type="hidden" name="id" value="{r['id']}">
+        <div class="kvbox">{campi}</div>
+        {hint}
+        {steps_html('pending')}
+        <details class="tech"><summary>Dettagli tecnici</summary><pre>{html.escape(r['payload'] or '')}</pre></details>
+        {bottoni}
+      </form>
+    </div>"""
+
+
+def pending_cards(agent_id: str | None = None, who: str = "Tu") -> tuple:
+    rows = pending_rows(agent_id)
+    cards = "".join(pending_card(r, who) for r in rows)
     if not cards:
         cards = ('<div class="empty">Nessuna richiesta in attesa. '
                  'I tuoi assistenti stanno solo consultando i dati.</div>')
@@ -438,13 +532,24 @@ def sidebar(path: str, npending: int) -> str:
         cls = "active" if path == href else ""
         return f'<a class="{cls}" href="{href}">{html.escape(label)}{extra}</a>'
 
+    with core.db() as c:
+        pend_agents = [r[0] for r in c.execute(
+            "SELECT DISTINCT agent FROM approvals WHERE status='pending'").fetchall()]
+    dept_pending = {core.AGENTS.get(a, {}).get("department") for a in pend_agents}
+    active_dept = ""
+    if path.startswith("/reparto/"):
+        active_dept = path.rsplit("/", 1)[-1]
+    elif path.startswith("/agente/"):
+        active_dept = core.AGENTS.get(path.rsplit("/", 1)[-1], {}).get("department", "")
+
     reparti = ""
     for dep_id, dep_label in core.DEPARTMENTS.items():
         agents = "".join(item(f"/agente/{aid}", a.get("label", aid))
                          for aid, a in core.AGENTS.items()
                          if a.get("department") == dep_id)
         dep_cls = "active" if path == f"/reparto/{dep_id}" else ""
-        reparti += (f'<details open><summary><a class="{dep_cls}" href="/reparto/{dep_id}">'
+        aperto = "open" if (dep_id in dept_pending or dep_id == active_dept) else ""
+        reparti += (f'<details {aperto}><summary><a class="{dep_cls}" href="/reparto/{dep_id}">'
                     f'{html.escape(dep_label)}</a></summary>{agents}</details>')
 
     dati = "".join(item(f"/dati/{e}", v.get("label", e))
@@ -476,6 +581,26 @@ setInterval(async()=>{try{const r=await fetch('/ping');
 if(r.ok&&(await r.text())!==s)location.reload();}catch(e){}},5000);
 </script>"""
 
+KBD_JS = """<div id="kbd-help"><b>Tastiera</b><br>
+j / k &mdash; scorri le richieste<br>a &mdash; approva &middot; r &mdash; rifiuta<br>
+? &mdash; mostra/nascondi questo aiuto</div>
+<script>
+(function(){
+const cards=[...document.querySelectorAll('.card[data-rid]')];if(!cards.length)return;
+let i=-1;
+const focus=n=>{cards.forEach(c=>c.classList.remove('focused'));
+i=(n+cards.length)%cards.length;cards[i].classList.add('focused');
+cards[i].scrollIntoView({block:'center',behavior:'smooth'})};
+document.addEventListener('keydown',e=>{
+if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+if(e.key==='j'){focus(i+1)}else if(e.key==='k'){focus(i-1)}
+else if(e.key==='a'&&i>=0){cards[i].querySelector('button.approva')?.click()}
+else if(e.key==='r'&&i>=0){cards[i].querySelector('button.rifiuta')?.click()}
+else if(e.key==='?'){document.getElementById('kbd-help').classList.toggle('show')}
+else return;e.preventDefault()});
+})();
+</script>"""
+
 
 def layout(title: str, path: str, body: str, refresh: bool = False) -> str:
     with core.db() as c:
@@ -489,6 +614,7 @@ def layout(title: str, path: str, body: str, refresh: bool = False) -> str:
 {sidebar(path, npending)}
 <main><div class="content">{body}</div></main>
 {poll}
+{KBD_JS}
 </body></html>"""
 
 
@@ -510,23 +636,49 @@ def stat_tiles() -> str:
         for v, l in tiles) + "</div>"
 
 
+ONBOARDING = """<div class="card"><b>Benvenuto in Varco</b>
+  <ol style="margin:10px 0 0;padding-left:20px;font-size:14.5px;line-height:2">
+    <li>Il gestionale demo è già collegato — vedi i dati nella sezione <b>Gestionale</b> del menù</li>
+    <li>Collega un agente: <code>claude mcp add varco -e VARCO_AGENT=assistente-vendite -- python varco_mcp.py</code></li>
+    <li>Chiedigli di creare un ordine: la richiesta di approvazione comparirà qui</li>
+  </ol></div>"""
+
+
 async def home(request):
     who = current_approver(request)
     if who is None:
         return RedirectResponse("/login", status_code=303)
-    cards, n = pending_cards(who=who)
+    rows = pending_rows()
+    n = len(rows)
+    urgenti = [r for r in rows if tg_urgent(r)]
+    ordinarie = [r for r in rows if not tg_urgent(r)]
     count_cls = "count" if n else "count zero"
-    bulk = ""
-    if n > 1:
-        bulk = f"""<form method="post" action="/decide_all" style="margin-bottom:12px">
-          <button class="approva">Approva tutte ({n})</button></form>"""
+    sezioni = ""
+    if urgenti:
+        sezioni += (f'<h3 class="bucket bucket-warn">Da guardare bene ({len(urgenti)}) '
+                    f'&mdash; importi sopra la soglia</h3>'
+                    + "".join(pending_card(r, who) for r in urgenti))
+    if ordinarie:
+        bulk = ""
+        if len(ordinarie) > 1:
+            bulk = (f'<form method="post" action="/decide_all" style="margin-bottom:12px">'
+                    f'<button class="approva">Approva tutte le ordinarie '
+                    f'({len(ordinarie)})</button></form>')
+        sezioni += (f'<h3 class="bucket">Entro le tue policy ({len(ordinarie)})</h3>{bulk}'
+                    + "".join(pending_card(r, who) for r in ordinarie))
+    if not sezioni:
+        with core.db() as c:
+            has_any = c.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
+        sezioni = ONBOARDING if not has_any else (
+            '<div class="empty">Nessuna richiesta in attesa. '
+            'I tuoi assistenti stanno solo consultando i dati.</div>')
     body = f"""
       <h1>Panoramica</h1>
-      <p class="sub">Quando un assistente vuole scrivere sul gestionale, prima chiede a te.</p>
+      <p class="sub">Quando un assistente vuole scrivere sul gestionale, prima chiede a te.
+        &middot; Tastiera: <b>j/k</b> scorri &middot; <b>a</b> approva &middot; <b>r</b> rifiuta &middot; <b>?</b> aiuto</p>
       {stat_tiles()}
       <h2>Da approvare <span class="{count_cls}">{n}</span></h2>
-      {bulk}
-      {cards}
+      {sezioni}
       <h2>Processi recenti</h2>
       {procs_html()}
       <h2>Ultime attivit&agrave;</h2>
@@ -561,10 +713,29 @@ async def agente(request):
     a = core.AGENTS[aid]
     cards, n = pending_cards(agent_id=aid, who=who)
     count_cls = "count" if n else "count zero"
+    with core.db() as c:
+        rules = c.execute("SELECT * FROM auto_rules WHERE agent=? ORDER BY id",
+                          (aid,)).fetchall()
+    regole = ""
+    if rules:
+        items = ""
+        for ru in rules:
+            revoca = ""
+            if can_decide(who, aid):
+                revoca = (f'<form method="post" action="/regola" style="margin-left:auto">'
+                          f'<input type="hidden" name="id" value="{ru["id"]}">'
+                          f'<button class="rifiuta" style="padding:3px 12px;font-size:12.5px">'
+                          f'Revoca</button></form>')
+            items += (f'<div class="evt"><span class="msg">Approva da solo: '
+                      f'{html.escape(ru["action"])} su {html.escape(ent(ru["entity"], "label"))} '
+                      f'quando {html.escape(ru["campo"].replace("_", " "))} = '
+                      f'<b>{html.escape(ru["valore"])}</b></span>{revoca}</div>')
+        regole = f'<h2>Regole di autonomia</h2><div class="feed">{items}</div>'
     body = f"""
       <h1>{html.escape(a.get('label', aid))}</h1>
       <p class="sub">Reparto {html.escape(agent_dept(aid))}</p>
       {agent_card(aid, link=False)}
+      {regole}
       <h2>Da approvare <span class="{count_cls}">{n}</span></h2>
       {cards}
       <h2>Processi recenti</h2>
@@ -671,12 +842,9 @@ async def decide_all(request):
     who = current_approver(request)
     if who is None:
         return RedirectResponse("/login", status_code=303)
-    with core.db() as c:
-        rows = c.execute(
-            "SELECT id, agent FROM approvals WHERE status='pending' ORDER BY id").fetchall()
-    for r in rows:
-        if not can_decide(who, r["agent"]):
-            continue
+    for r in pending_rows():
+        if not can_decide(who, r["agent"]) or tg_urgent(r):
+            continue  # le "da guardare bene" non entrano mai nel blocco
         try:
             core.decide(r["id"], True, note=" in blocco", decided_by=who)
         except Exception:  # errori tracciati per singola richiesta
@@ -690,7 +858,7 @@ async def decide(request):
         return RedirectResponse("/login", status_code=303)
     form = await request.form()
     rid = int(form["id"])
-    approve = form["azione"] == "approva"
+    azione = form["azione"]
     note = ""
     try:
         with core.db() as c:
@@ -698,15 +866,44 @@ async def decide(request):
         if row and not can_decide(who, row["agent"]):
             core.audit(who, "decisione", detail=f"richiesta #{rid} fuori delega",
                        status="negato")
+        elif azione == "chiarimenti":
+            core.ask_changes(rid, form.get("domanda", "").strip() or "Servono modifiche",
+                             decided_by=who)
         else:
+            approve = azione == "approva"
             if approve:
                 edits = extract_edits(form, rid)
                 if edits is not None:
                     core.update_payload(rid, edits)
                     note = " con modifiche dell'approvatore"
+                if form.get("ricorda"):
+                    with core.db() as c:
+                        full = c.execute("SELECT * FROM approvals WHERE id=?",
+                                         (rid,)).fetchone()
+                    try:
+                        core.add_rule(full["agent"], full["action"], full["entity"],
+                                      json.loads(full["payload"]), created_by=who)
+                    except (ValueError, TypeError):
+                        pass
             core.decide(rid, approve, note=note, decided_by=who)
     except Exception:  # esito ed errori restano tracciati in approvals/audit
         pass
+    return RedirectResponse(request.headers.get("referer") or "/", status_code=303)
+
+
+async def regola(request):
+    who = current_approver(request)
+    if who is None:
+        return RedirectResponse("/login", status_code=303)
+    form = await request.form()
+    with core.db() as c:
+        ru = c.execute("SELECT * FROM auto_rules WHERE id=?",
+                       (int(form["id"]),)).fetchone()
+    if ru and can_decide(who, ru["agent"]):
+        with core.db() as c:
+            c.execute("DELETE FROM auto_rules WHERE id=?", (ru["id"],))
+        core.audit(who, "regola-revocata", ru["entity"],
+                   detail=f"{ru['campo']} = {ru['valore']} per {ru['agent']}")
     return RedirectResponse(request.headers.get("referer") or "/", status_code=303)
 
 
@@ -839,6 +1036,7 @@ app = Starlette(routes=[
     Route("/decide_all", decide_all, methods=["POST"]),
     Route("/export/audit.csv", export_audit),
     Route("/ping", ping),
+    Route("/regola", regola, methods=["POST"]),
 ], lifespan=lifespan)
 
 if __name__ == "__main__":

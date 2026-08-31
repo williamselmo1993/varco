@@ -78,7 +78,7 @@ r1 = core.request_write("assistente-vendite", "create", "ordini", None,
                         {"numero": "OD-B1", "cliente": "Rossi Costruzioni Srl", "totale": 3000.0})
 r2 = core.request_write("assistente-vendite", "create", "ordini", None,
                         {"numero": "OD-B2", "cliente": "Verdi Impianti Snc", "totale": 2000.0})
-assert "Approva tutte (2)" in c.get("/").text
+assert "Approva tutte le ordinarie (2)" in c.get("/").text
 c.post("/decide_all", follow_redirects=True)
 with core.db() as db_:
     stati = {row[0] for row in db_.execute(
@@ -129,5 +129,65 @@ assert "Ricevimento Merci" in c2.get("/reparto/magazzino").text
 assert "PR-2026-0045" in c2.get("/dati/preventivi").text
 assert "DDT-1187" in c2.get("/dati/ddt_ingresso").text
 dash.APPROVERS = {}
+
+# --- pattern YC/US -----------------------------------------------------------
+c3 = TestClient(dash.app)
+
+# due secchi + motivo + eta' + tastiera: uno urgente (>5000) e uno ordinario
+ru = core.request_write("assistente-vendite", "create", "ordini", None,
+                        {"numero": "OD-URG", "cliente": "Rossi Costruzioni Srl",
+                         "totale": 9000.0})
+ro = core.request_write("assistente-vendite", "create", "ordini", None,
+                        {"numero": "OD-ORD", "cliente": "Verdi Impianti Snc",
+                         "totale": 1800.0})
+h = c3.get("/").text
+assert "Da guardare bene (1)" in h and "Entro le tue policy" in h
+assert "supera € 5.000" in h and "supera la sua soglia di autonomia" in h  # motivi Ramp-style
+assert "in attesa da" in h and 'data-rid=' in h and "kbd-help" in h        # eta' + tastiera
+assert "Chiedi una modifica" in h and "Ricorda: approva da solo" in h
+
+# il bulk non tocca mai le urgenti
+c3.post("/decide_all", follow_redirects=True)
+with core.db() as db_:
+    assert db_.execute("SELECT status FROM approvals WHERE id=?",
+                       (ru,)).fetchone()[0] == "pending"
+    assert db_.execute("SELECT status FROM approvals WHERE id=?",
+                       (ro,)).fetchone()[0] == "approvata"
+
+# chiedi una modifica: la richiesta torna all'assistente con la nota
+c3.post("/decide", data={"id": str(ru), "azione": "chiarimenti",
+                         "domanda": "usa il listino 2026"}, follow_redirects=True)
+with core.db() as db_:
+    row = db_.execute("SELECT status, result FROM approvals WHERE id=?",
+                      (ru,)).fetchone()
+assert row[0] == "chiarimenti" and "listino 2026" in row[1]
+assert "una modifica su Ordini di vendita" in c3.get("/attivita").text
+
+# regola "ricorda": approva con memoria -> la prossima identica passa da sola
+rr = core.request_write("assistente-vendite", "create", "ordini", None,
+                        {"numero": "OD-R1", "cliente": "Bianchi Alimentari Spa",
+                         "totale": 4000.0})
+c3.post("/decide", data={"id": str(rr), "azione": "approva", "ricorda": "on",
+                         "f_numero": "OD-R1", "f_cliente": "Bianchi Alimentari Spa",
+                         "f_totale": "4000"}, follow_redirects=True)
+rr2 = core.request_write("assistente-vendite", "create", "ordini", None,
+                         {"numero": "OD-R2", "cliente": "Bianchi Alimentari Spa",
+                          "totale": 4100.0})
+with core.db() as db_:
+    assert db_.execute("SELECT status FROM approvals WHERE id=?",
+                       (rr2,)).fetchone()[0] == "auto-approvata"
+pag = c3.get("/agente/assistente-vendite").text
+assert "Regole di autonomia" in pag and "Bianchi Alimentari Spa" in pag
+
+# revoca: la successiva identica torna a chiedere
+with core.db() as db_:
+    rule_id = db_.execute("SELECT id FROM auto_rules LIMIT 1").fetchone()[0]
+c3.post("/regola", data={"id": str(rule_id)}, follow_redirects=True)
+rr3 = core.request_write("assistente-vendite", "create", "ordini", None,
+                         {"numero": "OD-R3", "cliente": "Bianchi Alimentari Spa",
+                          "totale": 4200.0})
+with core.db() as db_:
+    assert db_.execute("SELECT status FROM approvals WHERE id=?",
+                       (rr3,)).fetchone()[0] == "pending"
 
 print("OK")
