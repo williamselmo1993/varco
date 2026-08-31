@@ -118,6 +118,11 @@ assert "will ha approvato" in c2.get("/attivita").text        # audit col nome
 csv_out = c2.get("/export/audit.csv")
 assert csv_out.status_code == 200 and "quando;chi" in csv_out.text
 
+# app shell: stato in data-s e /ping coerente (il client ricarica solo se cambia)
+pagina = c2.get("/").text
+assert 'data-s="' in pagina and "fetch('/ping')" in pagina
+assert c2.get("/ping").text == dash.app_state()
+
 # nuovi workflow a catalogo
 assert "Preventivi Rapidi" in c2.get("/reparto/vendite").text
 assert "Ricevimento Merci" in c2.get("/reparto/magazzino").text

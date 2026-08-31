@@ -85,9 +85,9 @@ def can_decide(name: str, agent_id: str) -> bool:
 CSS = """
 *{box-sizing:border-box}
 body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:#F6F8F4;color:#16211A;
-     font-size:15.5px;line-height:1.55;display:flex;min-height:100vh}
-aside{width:242px;flex-shrink:0;background:#1B4231;color:#E8F0EA;
-      padding:20px 12px;display:flex;flex-direction:column;gap:2px}
+     font-size:15.5px;line-height:1.55;display:flex;height:100vh;overflow:hidden}
+aside{width:242px;flex-shrink:0;background:#1B4231;color:#E8F0EA;height:100vh;
+      overflow-y:auto;padding:20px 12px;display:flex;flex-direction:column;gap:2px}
 aside .logo{font-weight:800;font-size:20px;letter-spacing:.06em;color:#fff;
             padding:0 10px 14px;border-bottom:1px solid #2E5B47;margin-bottom:10px}
 aside .logo span{color:#8FCBA8}
@@ -105,7 +105,8 @@ aside details details a{padding:5px 10px 5px 26px;font-size:13.5px}
 aside .count{background:#8FCBA8;color:#13301F;border-radius:10px;font-size:11.5px;
              padding:0 8px;font-weight:700}
 aside .foot{margin-top:auto;font-size:11.5px;color:#9DBBA9;padding:12px 10px 0}
-main{flex:1;min-width:0;padding:28px 34px 60px;max-width:960px}
+main{flex:1;min-width:0;height:100vh;overflow-y:auto;padding:28px 34px 60px}
+main>.content{max-width:960px}
 h1{font-size:22px;margin:0 0 4px}
 .sub{color:#56675C;font-size:13.5px;margin:0 0 20px}
 h2{font-size:18px;margin:30px 0 12px;display:flex;align-items:center;gap:10px}
@@ -171,9 +172,9 @@ table.data tr:last-child td{border-bottom:none}
 .warn{background:#F8E4E0;color:#96352B;border-radius:10px;font-size:11.5px;
       padding:1px 8px;margin-left:8px;white-space:nowrap}
 @media (max-width:780px){
-  body{flex-direction:column}
-  aside{width:100%}
-  main{padding:20px 16px 50px}
+  body{flex-direction:column;height:auto;overflow:visible}
+  aside{width:100%;height:auto;overflow:visible}
+  main{height:auto;overflow:visible;padding:20px 16px 50px}
   .kv span{min-width:100px}
   .tiles{grid-template-columns:1fr 1fr}
 }
@@ -460,16 +461,34 @@ def sidebar(path: str, npending: int) -> str:
     </aside>"""
 
 
+def app_state() -> str:
+    """Cambia quando c'e' qualcosa di nuovo da mostrare: il client ricarica solo allora."""
+    with core.db() as c:
+        npending = c.execute(
+            "SELECT COUNT(*) FROM approvals WHERE status='pending'").fetchone()[0]
+        last = c.execute("SELECT COALESCE(MAX(id),0) FROM audit").fetchone()[0]
+    return f"{npending}-{last}"
+
+
+POLL_JS = """<script>
+const s=document.body.dataset.s;
+setInterval(async()=>{try{const r=await fetch('/ping');
+if(r.ok&&(await r.text())!==s)location.reload();}catch(e){}},5000);
+</script>"""
+
+
 def layout(title: str, path: str, body: str, refresh: bool = False) -> str:
     with core.db() as c:
         npending = c.execute(
             "SELECT COUNT(*) FROM approvals WHERE status='pending'").fetchone()[0]
-    meta = '<meta http-equiv="refresh" content="15">' if refresh else ""
-    return f"""<!doctype html><html lang="it"><head><meta charset="utf-8">{meta}
+    poll = POLL_JS if refresh else ""
+    return f"""<!doctype html><html lang="it"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Varco &mdash; {html.escape(title)}</title><style>{CSS}</style></head><body>
+<title>Varco &mdash; {html.escape(title)}</title><style>{CSS}</style></head>
+<body data-s="{html.escape(app_state())}">
 {sidebar(path, npending)}
-<main>{body}</main>
+<main><div class="content">{body}</div></main>
+{poll}
 </body></html>"""
 
 
@@ -691,6 +710,12 @@ async def decide(request):
     return RedirectResponse(request.headers.get("referer") or "/", status_code=303)
 
 
+async def ping(request):
+    if not authed(request):
+        return Response("x", media_type="text/plain")
+    return Response(app_state(), media_type="text/plain")
+
+
 async def export_audit(request):
     if not authed(request):
         return RedirectResponse("/login", status_code=303)
@@ -813,6 +838,7 @@ app = Starlette(routes=[
     Route("/decide", decide, methods=["POST"]),
     Route("/decide_all", decide_all, methods=["POST"]),
     Route("/export/audit.csv", export_audit),
+    Route("/ping", ping),
 ], lifespan=lifespan)
 
 if __name__ == "__main__":
