@@ -80,15 +80,29 @@ Due controlli in più:
   accumulano e partono solo a quegli orari; sopra `soglia_web` la notifica è
   sempre immediata.
 
-### Accesso, blocco e metriche
+### Accesso, deleghe, blocco e metriche
 
 - **`VARCO_ACCESS_KEY`**: se impostata, la dashboard richiede il login
   (chiave unica, cookie firmato 30 giorni). Senza, resta aperta per la demo.
+- **`VARCO_APPROVERS`**: più approvatori con deleghe per reparto, formato
+  `nome:chiave:reparti` separati da `;` (`*` = tutti i reparti). Esempio:
+  `william:kW:*;anna:kA:amministrazione,acquisti`. Ognuno vede tutto ma
+  approva solo i reparti delegati; ogni decisione porta il suo nome
+  nell'audit.
 - **Approva tutte**: con più richieste in attesa compare il bottone di
-  approvazione in blocco.
+  approvazione in blocco (solo su quelle nella propria delega).
 - **Metriche in Panoramica**: azioni eseguite, quante in autonomia, stima del
   tempo risparmiato (`VARCO_MIN_PER_AZIONE`, default 5 minuti/azione) e
   richieste fermate.
+- **Export audit**: dalla pagina Attività si scarica il CSV completo
+  (`/export/audit.csv`) — la traccia per revisore e commercialista.
+
+### Catalogo workflow (demo inclusa)
+
+Sette assistenti su quattro reparti: ordini da email (Vendite), **Preventivi
+Rapidi** (Vendite), solleciti e riconciliazione (Amministrazione), riordino
+(Acquisti), **Ricevimento Merci** — DDT in ingresso → carico (Magazzino) —
+e Controllo Scorte.
 
 ## Demo per i titolari (5 minuti, senza ERP reale)
 

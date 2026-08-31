@@ -7,9 +7,11 @@ sull'ERP passa da un "Approva" umano.
 """
 import asyncio
 import contextlib
+import csv
 import hashlib
 import hmac
 import html
+import io
 import json
 import os
 import time
@@ -17,24 +19,68 @@ import time
 import httpx
 import uvicorn
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, RedirectResponse
+from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 import varco_core as core
 
-# Accesso: con env VARCO_ACCESS_KEY la dashboard richiede login (chiave unica
-# condivisa, cookie firmato). Senza, resta aperta per la demo locale.
+# Accesso e deleghe.
+# - VARCO_ACCESS_KEY: chiave unica, un solo approvatore ("Tu") su tutti i reparti.
+# - VARCO_APPROVERS: "nome:chiave:reparti;..." (reparti separati da virgola, * = tutti)
+#   es. "william:kW:*;anna:kA:amministrazione,acquisti" — ogni decisione porta il nome.
+# Senza env, demo locale aperta su 127.0.0.1.
 ACCESS_KEY = os.environ.get("VARCO_ACCESS_KEY", "")
 
 
-def _session_token() -> str:
-    return hmac.new(ACCESS_KEY.encode(), b"varco-session", hashlib.sha256).hexdigest()
+def _parse_approvers() -> dict:
+    out = {}
+    for entry in os.environ.get("VARCO_APPROVERS", "").split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        name, key, depts = entry.split(":", 2)
+        out[name] = {"key": key,
+                     "depts": None if depts.strip() == "*"
+                     else [d.strip() for d in depts.split(",") if d.strip()]}
+    return out
+
+
+APPROVERS = _parse_approvers()
+
+
+def _approvers() -> dict:
+    if APPROVERS:
+        return APPROVERS
+    if ACCESS_KEY:
+        return {"Tu": {"key": ACCESS_KEY, "depts": None}}
+    return {}
+
+
+def _sign(name: str, key: str) -> str:
+    return name + "|" + hmac.new(key.encode(), f"varco-session:{name}".encode(),
+                                 hashlib.sha256).hexdigest()
+
+
+def current_approver(request):
+    """Nome dell'approvatore loggato; 'Tu' in demo aperta; None se non autenticato."""
+    approvers = _approvers()
+    if not approvers:
+        return "Tu"
+    cookie = request.cookies.get("varco", "")
+    name = cookie.partition("|")[0]
+    a = approvers.get(name)
+    if a and hmac.compare_digest(cookie, _sign(name, a["key"])):
+        return name
+    return None
 
 
 def authed(request) -> bool:
-    if not ACCESS_KEY:
-        return True  # ponytail: senza chiave, demo locale aperta su 127.0.0.1
-    return hmac.compare_digest(request.cookies.get("varco", ""), _session_token())
+    return current_approver(request) is not None
+
+
+def can_decide(name: str, agent_id: str) -> bool:
+    depts = _approvers().get(name, {"depts": None})["depts"]
+    return depts is None or core.AGENTS.get(agent_id, {}).get("department") in depts
 
 CSS = """
 *{box-sizing:border-box}
@@ -257,22 +303,24 @@ def frase_attivita(r) -> tuple:
     if a == "richiesta-update":
         return f"{chi} ha chiesto di modificare {sing} — in attesa di approvazione", ""
     if a == "approvazione":
+        chi_v = "Hai approvato" if chi == "Tu" else f"{chi} ha approvato"
         if r["status"] == "errore":
-            return f"Hai approvato {sing}, ma il gestionale ha dato errore", "negato"
-        extra = " (con le tue modifiche)" if "modifiche" in (r["detail"] or "") else ""
-        return f"Hai approvato: {sing} è stato scritto sul gestionale{extra}", ""
+            return f"{chi_v} {sing}, ma il gestionale ha dato errore", "negato"
+        extra = " (con modifiche)" if "modifiche" in (r["detail"] or "") else ""
+        return f"{chi_v}: {sing} è stato scritto sul gestionale{extra}", ""
     if a == "auto-approvazione":
         if r["status"] == "errore":
             return f"{chi} ha provato a eseguire {sing} entro soglia, ma il gestionale ha dato errore", "negato"
         return f"{chi} ha eseguito {sing} da solo — entro la sua soglia di autonomia", ""
     if a == "rifiuto":
-        return f"Hai rifiutato la richiesta su {label}: nulla è stato toccato", ""
+        chi_v = "Hai rifiutato" if chi == "Tu" else f"{chi} ha rifiutato"
+        return f"{chi_v} la richiesta su {label}: nulla è stato toccato", ""
     return f"{chi}: {a} su {label}", ""
 
 
 # ---------------------------------------------------------------- blocchi
 
-def pending_cards(agent_id: str | None = None) -> tuple:
+def pending_cards(agent_id: str | None = None, who: str = "Tu") -> tuple:
     with core.db() as c:
         if agent_id:
             rows = c.execute("SELECT * FROM approvals WHERE status='pending' AND agent=? "
@@ -288,6 +336,12 @@ def pending_cards(agent_id: str | None = None) -> tuple:
         campi, editabile = dati_editabili(r["payload"])
         hint = ('<div class="edit-hint">Puoi correggere i valori prima di approvare.</div>'
                 if editabile else "")
+        if can_decide(who, r["agent"]):
+            bottoni = """<button class="approva" name="azione" value="approva">Approva</button>
+            <button class="rifiuta" name="azione" value="rifiuta">Rifiuta</button>"""
+        else:
+            bottoni = (f'<div class="edit-hint">Fuori dalla tua delega: la approva '
+                       f'chi segue il reparto {html.escape(agent_dept(r["agent"]))}.</div>')
         cards += f"""<div class="card">
           <div class="req-head"><b>{html.escape(agent_label(r['agent']))}</b>
             &middot; {html.escape(agent_dept(r['agent']))} &mdash; {verbo} <b>{html.escape(target)}</b>{rif}</div>
@@ -298,8 +352,7 @@ def pending_cards(agent_id: str | None = None) -> tuple:
             {hint}
             {steps_html('pending')}
             <details class="tech"><summary>Dettagli tecnici</summary><pre>{html.escape(r['payload'] or '')}</pre></details>
-            <button class="approva" name="azione" value="approva">Approva</button>
-            <button class="rifiuta" name="azione" value="rifiuta">Rifiuta</button>
+            {bottoni}
           </form>
         </div>"""
     if not cards:
@@ -439,9 +492,10 @@ def stat_tiles() -> str:
 
 
 async def home(request):
-    if not authed(request):
+    who = current_approver(request)
+    if who is None:
         return RedirectResponse("/login", status_code=303)
-    cards, n = pending_cards()
+    cards, n = pending_cards(who=who)
     count_cls = "count" if n else "count zero"
     bulk = ""
     if n > 1:
@@ -479,13 +533,14 @@ async def reparto(request):
 
 
 async def agente(request):
-    if not authed(request):
+    who = current_approver(request)
+    if who is None:
         return RedirectResponse("/login", status_code=303)
     aid = request.path_params["aid"]
     if aid not in core.AGENTS:
         return RedirectResponse("/", status_code=303)
     a = core.AGENTS[aid]
-    cards, n = pending_cards(agent_id=aid)
+    cards, n = pending_cards(agent_id=aid, who=who)
     count_cls = "count" if n else "count zero"
     body = f"""
       <h1>{html.escape(a.get('label', aid))}</h1>
@@ -550,7 +605,8 @@ async def attivita(request):
         return RedirectResponse("/login", status_code=303)
     body = f"""
       <h1>Attivit&agrave;</h1>
-      <p class="sub">Tutto quello che i tuoi assistenti hanno fatto, in ordine di tempo.</p>
+      <p class="sub">Tutto quello che i tuoi assistenti hanno fatto, in ordine di tempo.
+        &middot; <a href="/export/audit.csv" style="color:#22593F">Scarica l'audit completo (CSV)</a></p>
       {feed_html(limit=100)}"""
     return HTMLResponse(layout("attività", "/attivita", body, refresh=True))
 
@@ -581,45 +637,73 @@ def login_page(err: str = "") -> str:
 async def login(request):
     if request.method == "POST":
         form = await request.form()
-        if ACCESS_KEY and hmac.compare_digest(form.get("chiave", ""), ACCESS_KEY):
-            resp = RedirectResponse("/", status_code=303)
-            resp.set_cookie("varco", _session_token(), httponly=True, max_age=30 * 86400)
-            return resp
+        chiave = form.get("chiave", "")
+        for name, a in _approvers().items():
+            if hmac.compare_digest(chiave, a["key"]):
+                resp = RedirectResponse("/", status_code=303)
+                resp.set_cookie("varco", _sign(name, a["key"]),
+                                httponly=True, max_age=30 * 86400)
+                return resp
         return HTMLResponse(login_page("Chiave di accesso errata"), status_code=401)
     return HTMLResponse(login_page())
 
 
 async def decide_all(request):
-    if not authed(request):
+    who = current_approver(request)
+    if who is None:
         return RedirectResponse("/login", status_code=303)
     with core.db() as c:
-        ids = [r[0] for r in c.execute(
-            "SELECT id FROM approvals WHERE status='pending' ORDER BY id").fetchall()]
-    for i in ids:
+        rows = c.execute(
+            "SELECT id, agent FROM approvals WHERE status='pending' ORDER BY id").fetchall()
+    for r in rows:
+        if not can_decide(who, r["agent"]):
+            continue
         try:
-            core.decide(i, True, note=" in blocco")
+            core.decide(r["id"], True, note=" in blocco", decided_by=who)
         except Exception:  # errori tracciati per singola richiesta
             pass
     return RedirectResponse(request.headers.get("referer") or "/", status_code=303)
 
 
 async def decide(request):
-    if not authed(request):
+    who = current_approver(request)
+    if who is None:
         return RedirectResponse("/login", status_code=303)
     form = await request.form()
     rid = int(form["id"])
     approve = form["azione"] == "approva"
     note = ""
     try:
-        if approve:
-            edits = extract_edits(form, rid)
-            if edits is not None:
-                core.update_payload(rid, edits)
-                note = " con modifiche dell'approvatore"
-        core.decide(rid, approve, note=note)
+        with core.db() as c:
+            row = c.execute("SELECT agent FROM approvals WHERE id=?", (rid,)).fetchone()
+        if row and not can_decide(who, row["agent"]):
+            core.audit(who, "decisione", detail=f"richiesta #{rid} fuori delega",
+                       status="negato")
+        else:
+            if approve:
+                edits = extract_edits(form, rid)
+                if edits is not None:
+                    core.update_payload(rid, edits)
+                    note = " con modifiche dell'approvatore"
+            core.decide(rid, approve, note=note, decided_by=who)
     except Exception:  # esito ed errori restano tracciati in approvals/audit
         pass
     return RedirectResponse(request.headers.get("referer") or "/", status_code=303)
+
+
+async def export_audit(request):
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
+    with core.db() as c:
+        rows = c.execute("SELECT ts, agent, action, entity, record_id, detail, status "
+                         "FROM audit ORDER BY id").fetchall()
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["quando", "chi", "azione", "entita", "record", "dettaglio", "stato"])
+    for r in rows:
+        w.writerow(list(r))
+    return Response("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename=varco-audit.csv"})
 
 
 # ---------------------------------------------------------------- Telegram
@@ -728,6 +812,7 @@ app = Starlette(routes=[
     Route("/attivita", attivita),
     Route("/decide", decide, methods=["POST"]),
     Route("/decide_all", decide_all, methods=["POST"]),
+    Route("/export/audit.csv", export_audit),
 ], lifespan=lifespan)
 
 if __name__ == "__main__":

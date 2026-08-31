@@ -128,6 +128,14 @@ SEED = {
         {"numero": "OA-2026-0114", "fornitore": "Ferramenta Lombarda Srl",
          "totale": 960.00, "stato": "inviato"},
     ],
+    "preventivi": [
+        {"numero": "PR-2026-0045", "cliente": "Bianchi Alimentari Spa",
+         "totale": 3200.00, "stato": "inviato", "scadenza": "2026-09-10"},
+    ],
+    "ddt_ingresso": [
+        {"numero": "DDT-1187", "fornitore": "Ferramenta Lombarda Srl",
+         "colli": 12, "riferimento_ordine": "OA-2026-0114", "stato": "da registrare"},
+    ],
 }
 
 
@@ -326,7 +334,7 @@ def update_payload(approval_id: int, data: dict) -> None:
             raise ValueError(f"Richiesta {approval_id} inesistente o gia' decisa")
 
 
-def decide(approval_id: int, approve: bool, note: str = "") -> str:
+def decide(approval_id: int, approve: bool, note: str = "", decided_by: str = "umano") -> str:
     with db() as c:
         row = c.execute("SELECT * FROM approvals WHERE id=? AND status='pending'",
                         (approval_id,)).fetchone()
@@ -334,7 +342,8 @@ def decide(approval_id: int, approve: bool, note: str = "") -> str:
         raise ValueError(f"Richiesta {approval_id} inesistente o gia' decisa")
     if not approve:
         _close(approval_id, "rifiutata", "")
-        audit("umano", "rifiuto", row["entity"], row["record_id"], f"richiesta #{approval_id}")
+        audit(decided_by, "rifiuto", row["entity"], row["record_id"],
+              f"richiesta #{approval_id}{note}")
         return "rifiutata"
     try:
         with db() as c:  # ricarica: il payload puo' essere stato modificato dall'approvatore
@@ -342,12 +351,12 @@ def decide(approval_id: int, approve: bool, note: str = "") -> str:
         result = erp_execute(row["action"], row["entity"], row["record_id"] or None,
                              row["payload"])
         _close(approval_id, "approvata", result)
-        audit("umano", "approvazione", row["entity"], row["record_id"],
+        audit(decided_by, "approvazione", row["entity"], row["record_id"],
               f"richiesta #{approval_id} eseguita su ERP{note}")
         return result
     except Exception as e:
         _close(approval_id, "errore", str(e))
-        audit("umano", "approvazione", row["entity"], row["record_id"],
+        audit(decided_by, "approvazione", row["entity"], row["record_id"],
               f"richiesta #{approval_id}: {e}", "errore")
         raise
 

@@ -11,7 +11,9 @@
     "fatture": { "path": "/Sales Invoice", "description": "Fatture di vendita", "label": "Fatture", "singolare": "una fattura", "campo_importo": "importo" },
     "fornitori": { "path": "/Supplier", "description": "Anagrafica fornitori", "label": "Fornitori", "singolare": "un fornitore" },
     "articoli": { "path": "/Item", "description": "Articoli e giacenze", "label": "Articoli", "singolare": "un articolo" },
-    "ordini_acquisto": { "path": "/Purchase Order", "description": "Ordini a fornitore", "label": "Ordini d'acquisto", "singolare": "un ordine d'acquisto", "campo_importo": "totale" }
+    "ordini_acquisto": { "path": "/Purchase Order", "description": "Ordini a fornitore", "label": "Ordini d'acquisto", "singolare": "un ordine d'acquisto", "campo_importo": "totale" },
+    "preventivi": { "path": "/Quotation", "description": "Preventivi ai clienti", "label": "Preventivi", "singolare": "un preventivo", "campo_importo": "totale" },
+    "ddt_ingresso": { "path": "/Purchase Receipt", "description": "DDT in ingresso da fornitori", "label": "DDT in ingresso", "singolare": "un DDT in ingresso" }
   },
   "departments": {
     "vendite": "Vendite",
@@ -33,6 +35,19 @@
       "write": ["ordini", "clienti"],
       "soglie": { "ordini": 1000 },
       "soglia_web": { "ordini": 5000 }
+    },
+    "preventivatore": {
+      "department": "vendite",
+      "label": "Preventivi Rapidi",
+      "descrizione": "Risponde alle richieste di preventivo in minuti, non in giorni.",
+      "azioni": [
+        "Prepara la bozza di preventivo da una richiesta email, con listino e storico cliente",
+        "Risponde su preventivi inviati e in scadenza"
+      ],
+      "read": ["clienti", "articoli", "preventivi"],
+      "write": ["preventivi"],
+      "soglie": { "preventivi": 2000 },
+      "soglia_web": { "preventivi": 10000 }
     },
     "sollecitatore": {
       "department": "amministrazione",
@@ -70,6 +85,18 @@
       "write": ["ordini_acquisto"],
       "soglie": { "ordini_acquisto": 300 },
       "soglia_web": { "ordini_acquisto": 2000 }
+    },
+    "ricevimento-merci": {
+      "department": "magazzino",
+      "label": "Ricevimento Merci",
+      "descrizione": "Dal DDT cartaceo al carico di magazzino in due minuti.",
+      "azioni": [
+        "Registra i DDT in ingresso, con la tua approvazione",
+        "Controlla ordinato contro consegnato",
+        "Segnala le differenze di quantità"
+      ],
+      "read": ["fornitori", "articoli", "ordini_acquisto", "ddt_ingresso"],
+      "write": ["ddt_ingresso"]
     },
     "controllo-scorte": {
       "department": "magazzino",

@@ -15,9 +15,12 @@ custom agents) and your backend (ERP, or any REST/Odoo system) and enforces:
   from the web app or **Telegram** (WhatsApp next). Bulk approve, scheduled
   digests (`TELEGRAM_DIGEST`), and a second web-only threshold
   (`soglia_web`) for high amounts: no one-tap above it.
-- **Full audit trail** — every read, request, approval, rejection and
-  auto-execution is recorded. Built for EU AI Act art. 14-style human
-  oversight.
+- **Multiple approvers with per-department delegation** — `VARCO_APPROVERS`
+  (`name:key:departments;...`): everyone sees everything, each approves only
+  their delegated departments, every decision carries the approver's name.
+- **Full audit trail with CSV export** — every read, request, approval,
+  rejection and auto-execution is recorded and exportable
+  (`/export/audit.csv`). Built for EU AI Act art. 14-style human oversight.
 
 ```
 AI agent ──MCP──▶ varco_mcp ──▶ SQLite state ◀── dashboard / Telegram ◀── human

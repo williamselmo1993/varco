@@ -93,4 +93,36 @@ ok = c.post("/login", data={"chiave": "chiave-test"}, follow_redirects=False)
 assert ok.status_code == 303
 assert c.get("/").status_code == 200  # il cookie di sessione ora vale
 
+# approvatori con deleghe: anna solo amministrazione, will tutti i reparti
+c2 = TestClient(dash.app)
+dash.ACCESS_KEY = ""
+dash.APPROVERS = {"anna": {"key": "kA", "depts": ["amministrazione"]},
+                  "will": {"key": "kW", "depts": None}}
+c2.post("/login", data={"chiave": "kA"})
+rid3 = core.request_write("assistente-vendite", "create", "ordini", None,
+                          {"numero": "OD-DEL", "cliente": "Rossi Costruzioni Srl",
+                           "totale": 1500.0})
+assert "Fuori dalla tua delega" in c2.get("/").text
+c2.post("/decide", data={"id": str(rid3), "azione": "approva"})
+with core.db() as db_:
+    assert db_.execute("SELECT status FROM approvals WHERE id=?",
+                       (rid3,)).fetchone()[0] == "pending"   # anna non puo'
+c2.post("/login", data={"chiave": "kW"})
+c2.post("/decide", data={"id": str(rid3), "azione": "approva"})
+with core.db() as db_:
+    assert db_.execute("SELECT status FROM approvals WHERE id=?",
+                       (rid3,)).fetchone()[0] == "approvata"  # will si'
+assert "will ha approvato" in c2.get("/attivita").text        # audit col nome
+
+# export CSV dell'audit
+csv_out = c2.get("/export/audit.csv")
+assert csv_out.status_code == 200 and "quando;chi" in csv_out.text
+
+# nuovi workflow a catalogo
+assert "Preventivi Rapidi" in c2.get("/reparto/vendite").text
+assert "Ricevimento Merci" in c2.get("/reparto/magazzino").text
+assert "PR-2026-0045" in c2.get("/dati/preventivi").text
+assert "DDT-1187" in c2.get("/dati/ddt_ingresso").text
+dash.APPROVERS = {}
+
 print("OK")
