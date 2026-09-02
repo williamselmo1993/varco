@@ -378,6 +378,10 @@ def frase_attivita(r) -> tuple:
     a = r["action"]
     if a in ("search", "get"):
         return f"{chi} ha consultato {label}", ""
+    if a == "estrazione":
+        if r["status"] == "errore":
+            return f"{chi} non è riuscito a leggere un documento ({r['detail']})", "negato"
+        return f"{chi} ha letto un documento e preparato {sing} da approvare", ""
     if a == "richiesta-create":
         return f"{chi} ha chiesto di creare {sing} — in attesa di approvazione", ""
     if a == "richiesta-update":
@@ -867,10 +871,26 @@ async def dati(request):
 async def attivita(request):
     if not authed(request):
         return RedirectResponse("/login", status_code=303)
+    bench = core.benchmark_modelli()
+    qualita = ""
+    if bench:
+        righe = ""
+        for b in bench:
+            tasso = "—" if b["tasso_errore"] is None else f"{b['tasso_errore']:.0%}"
+            righe += (f"<tr><td class='mono'>{html.escape(b['modello'])}</td><td>{b['totale']}</td>"
+                      f"<td>{b['pulite']}</td><td>{b['corrette']}</td><td>{b['rifiutate']}</td>"
+                      f"<td><b>{tasso}</b></td></tr>")
+        qualita = f"""<h2>Qualit&agrave; dei modelli</h2>
+          <p class="sub">Ogni correzione o rifiuto dell'approvatore conta come errore del modello
+            che ha estratto la richiesta: il benchmark si fa da solo, sui tuoi documenti veri.</p>
+          <div class="tablewrap"><table class="data"><tr><th>Modello</th><th>Richieste</th>
+            <th>Approvate senza ritocchi</th><th>Corrette</th><th>Rifiutate</th><th>Tasso errore</th></tr>
+            {righe}</table></div>"""
     body = f"""
       <h1>Attivit&agrave;</h1>
       <p class="sub">Tutto quello che i tuoi assistenti hanno fatto, in ordine di tempo.
         &middot; <a href="/export/audit.csv" style="color:#22593F">Scarica l'audit completo (CSV)</a></p>
+      {qualita}
       {feed_html(limit=100)}"""
     return HTMLResponse(layout("attività", "/attivita", body, refresh=True))
 

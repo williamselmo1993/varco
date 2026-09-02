@@ -216,5 +216,31 @@
         "articoli"
       ]
     }
+  },
+  "workflows": {
+    "ordini-da-email": {
+      "agent": "assistente-vendite",
+      "entity": "ordini",
+      "inbox": "inbox/ordini",
+      "campi": [
+        "numero",
+        "cliente",
+        "totale",
+        "note"
+      ],
+      "istruzioni": "Il documento e un ordine ricevuto da un cliente via email o PDF. cliente e la ragione sociale; totale e l importo complessivo in euro; note riassume righe e condizioni in una frase."
+    },
+    "preventivi-da-email": {
+      "agent": "preventivatore",
+      "entity": "preventivi",
+      "inbox": "inbox/preventivi",
+      "campi": [
+        "cliente",
+        "totale",
+        "stato",
+        "note"
+      ],
+      "istruzioni": "Il documento e una richiesta di preventivo. Stima totale solo se il documento contiene prezzi o quantita chiare, altrimenti lascia null; stato e sempre bozza; note riassume cosa chiede il cliente."
+    }
   }
 }

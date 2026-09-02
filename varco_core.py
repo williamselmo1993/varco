@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS auto_rules (
   entity TEXT, campo TEXT, valore TEXT);
 CREATE TABLE IF NOT EXISTS firme (
   approval_id INTEGER, approver TEXT, ts TEXT, UNIQUE (approval_id, approver));
+CREATE TABLE IF NOT EXISTS inbox_done (
+  nome TEXT PRIMARY KEY, ts TEXT, approval_id INTEGER);
 """
 
 
@@ -46,7 +48,8 @@ def db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     for col in ("notified INTEGER DEFAULT 0", "doppia INTEGER DEFAULT 0",
-                "reminded INTEGER DEFAULT 0"):  # migrazioni additive sui DB esistenti
+                "reminded INTEGER DEFAULT 0", "modello TEXT DEFAULT ''",
+                "edited INTEGER DEFAULT 0"):  # migrazioni additive sui DB esistenti
         try:
             conn.execute(f"ALTER TABLE approvals ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -348,15 +351,16 @@ def dual_required(agent: str, entity: str, data: dict) -> bool:
         return False
 
 
-def request_write(agent: str, action: str, entity: str, record_id, data: dict) -> int:
+def request_write(agent: str, action: str, entity: str, record_id, data: dict,
+                  modello: str = "") -> int:
     check_write(agent, entity)
     doppia = 1 if dual_required(agent, entity, data) else 0  # snapshot del regime alla creazione
     with db() as c:
         cur = c.execute(
-            "INSERT INTO approvals (ts, agent, action, entity, record_id, payload, doppia) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO approvals (ts, agent, action, entity, record_id, payload, doppia, modello) "
+            "VALUES (?,?,?,?,?,?,?,?)",
             (now(), agent, action, entity, str(record_id or ""),
-             json.dumps(data, ensure_ascii=False), doppia))
+             json.dumps(data, ensure_ascii=False), doppia, modello))
         rid = cur.lastrowid
     motivo = ""
     if not doppia:  # sopra la soglia doppia nessuna scorciatoia: sempre due umani
@@ -403,10 +407,32 @@ def ask_changes(approval_id: int, question: str, decided_by: str = "umano") -> N
 def update_payload(approval_id: int, data: dict) -> None:
     """Sostituisce i dati di una richiesta ancora pending (review-and-edit)."""
     with db() as c:
-        cur = c.execute("UPDATE approvals SET payload=? WHERE id=? AND status='pending'",
+        cur = c.execute("UPDATE approvals SET payload=?, edited=1 "
+                        "WHERE id=? AND status='pending'",
                         (json.dumps(data, ensure_ascii=False), approval_id))
         if cur.rowcount == 0:
             raise ValueError(f"Richiesta {approval_id} inesistente o gia' decisa")
+
+
+def benchmark_modelli() -> list:
+    """Qualita' per modello: ogni correzione o rifiuto dell'approvatore conta come errore."""
+    with db() as c:
+        rows = c.execute(
+            "SELECT modello, COUNT(*) AS totale, "
+            "SUM(status IN ('approvata','auto-approvata') AND edited=0) AS pulite, "
+            "SUM(edited=1) AS corrette, SUM(status='rifiutata') AS rifiutate, "
+            "SUM(status='pending') AS in_attesa "
+            "FROM approvals WHERE modello != '' GROUP BY modello ORDER BY totale DESC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        decise = r["totale"] - r["in_attesa"]
+        out.append({"modello": r["modello"], "totale": r["totale"], "pulite": r["pulite"] or 0,
+                    "corrette": r["corrette"] or 0, "rifiutate": r["rifiutate"] or 0,
+                    "in_attesa": r["in_attesa"] or 0,
+                    "tasso_errore": ((r["corrette"] or 0) + (r["rifiutate"] or 0)) / decise
+                    if decise else None})
+    return out
 
 
 def decide(approval_id: int, approve: bool, note: str = "", decided_by: str = "umano") -> str:

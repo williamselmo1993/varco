@@ -3,3 +3,5 @@ __pycache__/
 *.db
 .mcp.json
 .claude/
+inbox/*/*
+!inbox/ordini/esempio-ordine.txt

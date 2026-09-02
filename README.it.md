@@ -107,6 +107,31 @@ Due controlli in più:
 - **Export audit**: dalla pagina Attività si scarica il CSV completo
   (`/export/audit.csv`) — la traccia per revisore e commercialista.
 
+### Workflow gestiti: il worker
+
+I workflow del catalogo non hanno bisogno dell'agente del cliente: li fa girare
+[varco_worker.py](varco_worker.py). Legge i documenti nuovi nella inbox di ogni
+workflow (email `.txt`/`.eml` o PDF — i PDF vanno al modello così come sono),
+chiede al modello di estrarre i campi e crea la richiesta in Varco, che entra
+nel flusso normale: soglie, review-and-edit, doppia firma, approvazione.
+
+```bash
+set OPENROUTER_API_KEY=...            # mai nel codice
+.venv\Scripts\python varco_worker.py  # loop; --once per una passata sola
+```
+
+Config in `varco_config.json` → `workflows`: agente, entità, cartella inbox,
+campi da estrarre e istruzioni. Modello via `VARCO_MODEL` (default
+`z-ai/glm-5.3-flash`, pesi aperti MIT, multimodale); la chiamata pretende
+provider **senza retention dei dati** (`provider.data_collection: deny`), così
+il data path resta pulito anche con modelli di origine cinese. Metti un
+documento in `inbox/ordini/` (c'è già un esempio) e guarda comparire la richiesta.
+
+**Benchmark automatico**: ogni richiesta ricorda il modello che l'ha estratta;
+ogni correzione o rifiuto dell'approvatore conta come errore. La tabella
+"Qualità dei modelli" nella pagina Attività confronta i modelli sui documenti
+veri del cliente — cambia `VARCO_MODEL` e il confronto si popola da solo.
+
 ### Catalogo workflow (demo inclusa)
 
 Sette assistenti su quattro reparti: ordini da email (Vendite), **Preventivi
